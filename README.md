@@ -3,7 +3,7 @@
 TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract) — typed wrappers over the
 `LogswapManager` / `LogswapRouter` / `LogswapLens` surface.
 
-**Status: phase 2 of `docs/app.md` — identity and derivation.** Reads and writes come next.
+**Status: identity, reads and writes.** Indexer and app next.
 
 ## What is here now
 
@@ -14,6 +14,13 @@ wrong is silent:
 |---|---|
 | `src/keys.ts` | `PoolKey` and `poolId = keccak256(abi.encode(key))` — market identity |
 | `src/ids.ts` | the ERC-6909 id namespace: position-class ids, token-claim ids, floor/cap packing |
+| `src/client.ts` | the handle, plus `assertVersion` — refuse a deployment the ABI was not built for |
+| `src/pools.ts` | market discovery from `Initialize` logs, pool state, `lpEdge` = F − Σ/2 |
+| `src/positions.ts` | classes, balances, claimable fees, the bit-255 position/claim split |
+| `src/swap.ts` | exact-in/out, multi-hop, and exact quotes via the revert-quoter |
+| `src/liquidity.ts` | mint, blended mint, zap, update, move, **harvest**, burn |
+| `src/claims.ts` | fee claims and the 6909 operator grant |
+| `src/onboard.ts` | the three approvals — ERC-20 → Permit2 → router, and the 6909 grant |
 
 Both are computed **offline** — no RPC, no deployment needed to address a market or a position.
 
