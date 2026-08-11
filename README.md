@@ -1,6 +1,6 @@
 # logswap-sdk
 
-TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap) — typed wrappers over the
+TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract) — typed wrappers over the
 `LogswapManager` / `LogswapRouter` / `LogswapLens` surface.
 
 **Status: phase 2 of `docs/app.md` — identity and derivation.** Reads and writes come next.

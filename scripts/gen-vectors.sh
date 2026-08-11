@@ -13,6 +13,6 @@ set -euo pipefail
 export PATH="$HOME/.foundry/bin:$PATH"
 
 npm run --silent contracts:sync
-forge script script/GenVectors.s.sol:GenVectors --root contracts >/dev/null
+(cd contracts && forge script script/GenVectors.s.sol:GenVectors >/dev/null)
 cp contracts/abi/derivation-vectors.json vectors/derivation-vectors.json
 echo "✓ vectors regenerated from contracts @ $(git -C contracts rev-parse --short HEAD)"

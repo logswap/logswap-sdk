@@ -1,7 +1,7 @@
 {
   "name": "@unimodular/logswap-sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for Logswap — typed wrappers over the LogswapManager / Router / Lens surface.",
+  "description": "TypeScript SDK for Logswap \u2014 typed wrappers over the LogswapManager / Router / Lens surface.",
   "license": "GPL-2.0-or-later",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,7 +13,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "contracts:sync": "bash scripts/sync-contracts.sh",
     "codegen": "npm run contracts:sync && forge build --root contracts && wagmi generate",
@@ -24,7 +27,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "peerDependencies": { "viem": "^2.0.0" },
+  "peerDependencies": {
+    "viem": "^2.0.0"
+  },
   "devDependencies": {
     "@wagmi/cli": "^2.1.0",
     "abitype": "^1.0.0",
@@ -32,6 +37,11 @@
     "viem": "^2.21.0",
     "vitest": "^4.1.10"
   },
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/unimodularxyz/logswap-sdk.git" }
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unimodularxyz/logswap-sdk.git"
+  }
 }
