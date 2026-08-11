@@ -25,7 +25,8 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist src/generated.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "viem": "^2.0.0"
