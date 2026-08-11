@@ -76,3 +76,37 @@ runs once and explicitly rather than being chained into both.
   ids**. Always address a market by the key it was initialized with.
 - **Split every ERC-6909 `Transfer` on bit 255.** Clear means a token claim, not a position; an
   indexer that ignores this reports phantom LP positions for market makers parking inventory.
+
+## Install
+
+```bash
+npm i @unimodular/logswap-sdk viem
+```
+
+`viem` is a peer dependency. The package ships `dist/` plus `src/`, including the generated ABIs, so
+the contract surface it was built against travels with it.
+
+## Release
+
+Push-driven, and there is **no npm token anywhere**: publishing uses OIDC trusted publishing, so npm
+verifies a GitHub-issued token per run and there is no long-lived credential to rotate or leak.
+
+```
+logswap-contract push
+   → Update SDK contracts pin   (GitHub App token, cross-repo)
+   → commit contracts.ref here
+   → Release on contracts pin change
+   → codegen at the pinned SHA → build → test → version bump → npm publish --provenance
+```
+
+`workflow_dispatch` covers SDK-only fixes with no contracts change: same pipeline, manual trigger.
+The version bump touches `package.json` only, not `contracts.ref`, so it cannot re-trigger itself.
+
+Two things that are easy to get wrong:
+
+- **`codegen` must run before `typecheck`.** `src/generated.ts` is gitignored, so it exists on a
+  developer machine and never in CI — a `typecheck`-first pipeline fails only in CI, which is where
+  it is least convenient to debug.
+- **`0.1.0` has no provenance attestation, every release after does.** Trusted publishing cannot be
+  configured for a package that does not exist yet, so the first publish is necessarily manual.
+  `prepublishOnly` runs the build, so a hand-run publish cannot ship a stale `dist/`.
