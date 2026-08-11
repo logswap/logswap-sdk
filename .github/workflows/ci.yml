@@ -1,0 +1,57 @@
+name: CI
+
+# Verify the SDK builds against the pinned contracts on every push / PR.
+# Regenerates generated.ts from logswap-contract @ contracts.ref, typechecks, builds, and runs the
+# derivation vectors. This is the ANTI-DRIFT GATE: if a contract change breaks the SDK, tsc fails
+# here rather than at runtime in somebody's app.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      # Short-lived token from the org GitHub App to read the private contracts repo. The App must
+      # be installed on unimodularxyz/logswap-contract for this to resolve.
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: unimodularxyz
+          repositories: logswap-contract
+      - name: Configure contracts clone URL (codegen clones logswap-contract via the App token)
+        run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/unimodularxyz/logswap-contract.git" >> "$GITHUB_ENV"
+
+      - uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+      # The cross-implementation check: the TypeScript must reproduce the Solidity's poolId and
+      # position-id derivations exactly. Both are tier-1 frozen, and getting them wrong is silent.
+      - run: npm test
+
+      # A diff here means the DERIVATION moved, which is by definition a tier-1 event — never an
+      # incidental one. Fail loudly rather than quietly regenerating.
+      - name: Vectors must match the pinned contracts
+        run: |
+          npm run vectors
+          git diff --exit-code -- vectors/ || {
+            echo "::error::derivation vectors changed — poolId or the position-id packing moved."
+            exit 1
+          }

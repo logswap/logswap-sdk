@@ -1,0 +1,66 @@
+name: Release on contracts pin change
+
+# Push-driven: logswap-contract delivers a new version by pushing a commit that updates
+# contracts.ref here. That commit triggers this workflow — regenerate the ABIs at the pinned SHA,
+# bump the patch version, and publish to npm via OIDC.
+#
+# Loop-safe: the version-bump commit touches package.json only (not contracts.ref), so it does NOT
+# re-trigger this workflow.
+#
+# workflow_dispatch covers SDK-only fixes (no contracts change): same pipeline, manual trigger.
+on:
+  push:
+    branches: [main]
+    paths:
+      - contracts.ref
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the version bump + tag back
+      id-token: write # OIDC token npm verifies — no NPM_TOKEN needed
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Short-lived token from the org GitHub App to read the private contracts repo.
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: unimodularxyz
+          repositories: logswap-contract
+      - name: Configure contracts clone URL
+        run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/unimodularxyz/logswap-contract.git" >> "$GITHUB_ENV"
+
+      - uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@11.6.4
+      - run: npm ci
+
+      - name: Build (codegen embeds the ABIs @ contracts.ref into dist/)
+        run: npm run build
+
+      # Never ship a build whose offline derivations disagree with the contracts it embeds.
+      - run: npm test
+
+      - name: Bump patch version (commits + tags)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version patch -m "release: %s (contracts $(cat contracts.ref))"
+
+      - name: Publish to npm (OIDC + provenance)
+        run: npm publish --provenance --access public
+
+      - name: Push version bump + tag
+        run: git push --follow-tags
