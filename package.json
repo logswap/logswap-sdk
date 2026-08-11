@@ -1,7 +1,7 @@
 {
   "name": "@unimodular/logswap-sdk",
-  "version": "0.1.0",
-  "description": "TypeScript SDK for Logswap \u2014 typed wrappers over the LogswapManager / Router / Lens surface.",
+  "version": "0.1.1",
+  "description": "TypeScript SDK for Logswap — typed wrappers over the LogswapManager / Router / Lens surface.",
   "license": "GPL-2.0-or-later",
   "type": "module",
   "main": "./dist/index.js",
