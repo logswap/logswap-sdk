@@ -50,11 +50,14 @@ regenerates; `tsc` is the drift gate, so a contract change that breaks the SDK i
 than a runtime surprise.
 
 ```bash
-npm run contracts:sync   # clone/checkout the pinned contracts (gitignored)
-npm run codegen          # sync + forge build + wagmi generate
-npm run typecheck
+npm run codegen     # sync the pinned contracts, forge build, wagmi generate -> src/generated.ts
+npm run typecheck   # consumes generated.ts; run codegen first on a fresh checkout
+npm run build
 npm test
 ```
+
+`typecheck` and `build` both *consume* `src/generated.ts` and neither produces it, so codegen
+runs once and explicitly rather than being chained into both.
 
 ## Conventions
 

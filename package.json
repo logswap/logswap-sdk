@@ -21,7 +21,7 @@
     "contracts:sync": "bash scripts/sync-contracts.sh",
     "codegen": "npm run contracts:sync && forge build --root contracts && wagmi generate",
     "vectors": "bash scripts/gen-vectors.sh",
-    "build": "npm run codegen && tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist src/generated.ts",
     "test": "vitest run",

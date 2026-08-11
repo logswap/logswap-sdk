@@ -50,8 +50,10 @@ jobs:
       - run: npm install -g npm@11.6.4
       - run: npm ci
 
-      - name: Build (codegen embeds the ABIs @ contracts.ref into dist/)
-        run: npm run build
+      - name: Codegen + build (embeds the ABIs @ contracts.ref into dist/)
+        run: |
+          npm run codegen
+          npm run build
 
       # Never ship a build whose offline derivations disagree with the contracts it embeds.
       - run: npm test
