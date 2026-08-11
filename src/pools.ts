@@ -164,6 +164,65 @@ export async function isValidFloor(c: LogswapClient, key: PoolKey, floor: bigint
   }) as Promise<boolean>;
 }
 
+/**
+ * A market's token decimals, read from the tokens themselves.
+ *
+ * **Never assume these.** A market's two tokens routinely differ (USDC 6 against WETH 18), the
+ * manager itself probes `decimals()` to scale `minBackstopL`, and a token that does not implement
+ * it falls back to 18. Hardcoding a guess makes every parse and every display wrong by orders of
+ * magnitude while the contract behaves perfectly — which reads as "the app is broken".
+ */
+export async function marketDecimals(
+  c: LogswapClient,
+  key: PoolKey,
+): Promise<{ base: number; quote: number }> {
+  const abi = [
+    { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+  ] as const;
+  const read = async (token: Address): Promise<number> => {
+    try {
+      return Number(await c.public.readContract({ address: token, abi, functionName: "decimals" }));
+    } catch {
+      return 18; // same fallback the manager uses when the token does not implement it
+    }
+  };
+  const [base, quote] = await Promise.all([read(key.base), read(key.quote)]);
+  return { base, quote };
+}
+
+/** A token as a UI needs it: address, symbol and decimals, all read from the chain. */
+export interface TokenInfo {
+  address: Address;
+  symbol: string;
+  decimals: number;
+}
+
+/** Both sides of a market, for labelling and scaling. One call, four reads, cached by the caller. */
+export async function marketTokens(
+  c: LogswapClient,
+  key: PoolKey,
+): Promise<{ base: TokenInfo; quote: TokenInfo }> {
+  const abi = [
+    { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+    { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
+  ] as const;
+  const read = async (address: Address): Promise<TokenInfo> => {
+    const [decimals, symbol] = await Promise.all([
+      c.public
+        .readContract({ address, abi, functionName: "decimals" })
+        .then(Number)
+        .catch(() => 18),
+      c.public
+        .readContract({ address, abi, functionName: "symbol" })
+        .then(String)
+        .catch(() => address.slice(0, 6)),
+    ]);
+    return { address, symbol, decimals };
+  };
+  const [base, quote] = await Promise.all([read(key.base), read(key.quote)]);
+  return { base, quote };
+}
+
 /** Format a quote-denominated amount for display, given the quote's decimals. */
 export function formatQuote(amount: bigint, quoteDecimals: number): string {
   return formatUnits(amount, quoteDecimals);
