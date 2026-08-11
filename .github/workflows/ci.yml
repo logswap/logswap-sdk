@@ -45,9 +45,22 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+      # Stand up a node with the local deployment so the INTEGRATION reads actually run. The fork
+      # test this pattern replaces was skipped in CI and therefore guarded nothing; LOGSWAP_REQUIRE_NODE
+      # makes a missing node a hard failure rather than a silent skip.
+      - name: Deploy to anvil
+        run: |
+          anvil --silent &
+          for i in $(seq 1 30); do cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          (cd contracts && ./script/local-deploy.sh)
+
       # The cross-implementation check: the TypeScript must reproduce the Solidity's poolId and
       # position-id derivations exactly. Both are tier-1 frozen, and getting them wrong is silent.
-      - run: npm test
+      - name: Test (unit + integration)
+        env:
+          LOGSWAP_REQUIRE_NODE: "1"
+          LOGSWAP_DEPLOYMENT: contracts/deployments/local.json
+        run: npm test
 
       # A diff here means the DERIVATION moved, which is by definition a tier-1 event — never an
       # incidental one. Fail loudly rather than quietly regenerating.
