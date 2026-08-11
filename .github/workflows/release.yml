@@ -30,7 +30,9 @@ jobs:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
         with:
-          app-id: ${{ secrets.APP_ID }}
+          # App ID is public metadata, not a secret — inlined so the only thing to
+          # configure is APP_PRIVATE_KEY. App: unimod-ci.
+          app-id: 4206988
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: unimodularxyz
           repositories: logswap-contract
