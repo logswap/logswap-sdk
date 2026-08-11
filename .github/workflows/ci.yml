@@ -25,9 +25,10 @@ jobs:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
         with:
-          # App ID is public metadata, not a secret — inlined so the only thing to
-          # configure is APP_PRIVATE_KEY. App: unimod-ci.
-          app-id: 4206988
+          # The App's CLIENT ID, which GitHub now prefers over the numeric App ID as the JWT
+          # issuer. Public metadata, not a credential — the private key is what signs, and it is
+          # the only secret this workflow needs. App: unimodular-ci.
+          app-id: Iv23liQW3rA6qn9mG00J
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: unimodularxyz
           repositories: logswap-contract
