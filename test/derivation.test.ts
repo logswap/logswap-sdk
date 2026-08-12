@@ -1,3 +1,4 @@
+import { annualise, edgeQuote, feesQuote, floorDistance, floorDrawdown, floorDrawdownPrice, floorPrice, lpEdge } from "../src/pools.js";
 /**
  * THE GATE (docs/app.md, phase 2). `poolId` and the position-id packing are tier-1 frozen and the
  * SDK computes both OFFLINE, with no RPC — so if the TypeScript and the Solidity ever disagree, a
@@ -99,5 +100,49 @@ describe("off-grid inputs fail at the call site, not at the transaction", () => 
 
   it("rejects a cap at or below the floor", () => {
     expect(() => positionId(pid, spacing, 2n * spacing, 2n * spacing)).toThrow(/strictly above/);
+  });
+});
+
+describe("denominated readouts", () => {
+  const WAD = 10n ** 18n;
+  // F = 2% per unit L, Sigma = 1%, L = 1,000,000 quote
+  const s = {
+    F: WAD / 50n,
+    bigSigma: WAD / 100n,
+    lActive: 1_000_000n * WAD,
+    x: 0n,
+    backstopFloor: -2n * (WAD / 10n), // floor at log -0.2
+  };
+
+  it("fees in quote are F times L, not F", () => {
+    expect(feesQuote(s)).toBe(20_000n * WAD); // 2% of 1,000,000
+  });
+
+  it("edge in quote applies the same scaling to F - Sigma/2", () => {
+    // 0.02 - 0.005 = 0.015 -> 15,000
+    expect(edgeQuote(s)).toBe(15_000n * WAD);
+    expect(edgeQuote(s)).toBe((lpEdge(s) * s.lActive) / WAD);
+  });
+
+  it("floor distance is x - xi, and the drawdown is its negation", () => {
+    expect(floorDistance(s)).toBe(2n * (WAD / 10n));
+    expect(floorDrawdown(s)).toBeCloseTo(-0.2, 12);
+  });
+
+  it("floor price and the arithmetic drawdown agree with exp", () => {
+    expect(floorPrice(s)).toBeCloseTo(Math.exp(-0.2), 12);
+    // a 0.2 log distance is an 18.1% price fall, not 20% — the gap the log measure hides
+    expect(floorDrawdownPrice(s)).toBeCloseTo(Math.exp(-0.2) - 1, 12);
+    expect(floorDrawdownPrice(s)).toBeCloseTo(-0.1813, 4);
+  });
+
+  it("annualises a realised rate over its own window", () => {
+    const halfYear = 31_536_000n / 2n;
+    expect(annualise(WAD / 50n, halfYear)).toBeCloseTo(0.04, 12); // 2% in 6 months -> 4%/yr
+    expect(annualise(WAD / 50n, 31_536_000n)).toBeCloseTo(0.02, 12);
+  });
+
+  it("annualise is zero rather than infinite at zero elapsed", () => {
+    expect(annualise(WAD, 0n)).toBe(0);
   });
 });
