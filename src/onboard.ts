@@ -92,14 +92,15 @@ export async function approvePermit2ForRouter(
  * prompting twice.
  */
 export async function onboardToken(c: LogswapClient, token: Address, need: bigint): Promise<Hash[]> {
-  const { account } = requireWallet(c);
+  // The address, not the account object: these two are READS. Signing paths take the object.
+  const { address } = requireWallet(c);
   const sent: Hash[] = [];
 
   const allowance = (await c.public.readContract({
     address: token,
     abi: ERC20,
     functionName: "allowance",
-    args: [account, spenderFor(c)],
+    args: [address, spenderFor(c)],
   })) as bigint;
   if (allowance < need) {
     const h = await approveToken(c, token);
@@ -112,7 +113,7 @@ export async function onboardToken(c: LogswapClient, token: Address, need: bigin
       address: c.addresses.permit2!,
       abi: PERMIT2,
       functionName: "allowance",
-      args: [account, token, c.addresses.router],
+      args: [address, token, c.addresses.router],
     })) as readonly [bigint, number, number];
     if (amt < need) {
       const h = await approvePermit2ForRouter(c, token);

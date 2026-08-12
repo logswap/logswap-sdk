@@ -33,16 +33,29 @@ export function resolveDeadline(o: WriteOptions | undefined, now = Date.now()): 
   return o?.deadline ?? BigInt(Math.floor(now / 1000)) + DEFAULT_DEADLINE_SECONDS;
 }
 
-export function requireWallet(c: LogswapClient): { account: Address } {
-  const account = c.wallet?.account?.address;
+/**
+ * The wallet's account, as the ACCOUNT OBJECT rather than its address.
+ *
+ * This distinction decides how the transaction is signed, and getting it wrong fails in only half
+ * the cases — which is how it survived a long time here. viem treats a bare `0x…` address as a
+ * *JSON-RPC account* and calls `eth_sendTransaction`, asking the NODE to sign. That is right for an
+ * injected wallet and wrong for a local account, which must sign in-process and send
+ * `eth_sendRawTransaction`.
+ *
+ * A dev node holds the keys for its own accounts, so passing an address appears to work right up
+ * until someone uses a key the node does not have — a bot, a script, CI, or a real user's wallet.
+ * Passing the object lets viem pick the correct path for both kinds.
+ */
+export function requireWallet(c: LogswapClient): { account: NonNullable<LogswapClient["wallet"]>["account"]; address: Address } {
+  const account = c.wallet?.account;
   if (!c.wallet || !account) {
     throw new Error("logswap: this call needs a wallet client — createLogswapClient({ wallet, … })");
   }
-  return { account };
+  return { account, address: account.address };
 }
 
 export function resolveRecipient(c: LogswapClient, o?: WriteOptions): Address {
-  return o?.recipient ?? requireWallet(c).account;
+  return o?.recipient ?? requireWallet(c).address;
 }
 
 /**
