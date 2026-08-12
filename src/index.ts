@@ -15,3 +15,4 @@ export * from "./swap.js";
 export * from "./liquidity.js";
 export * from "./claims.js";
 export * from "./onboard.js";
+export * from "./indexer.js";

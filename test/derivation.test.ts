@@ -1,3 +1,4 @@
+import { bytea } from "../src/indexer.js";
 import { annualise, edgeQuote, feesQuote, floorDistance, floorDrawdown, floorDrawdownPrice, floorPrice, lpEdge } from "../src/pools.js";
 /**
  * THE GATE (docs/app.md, phase 2). `poolId` and the position-id packing are tier-1 frozen and the
@@ -144,5 +145,17 @@ describe("denominated readouts", () => {
 
   it("annualise is zero rather than infinite at zero elapsed", () => {
     expect(annualise(WAD, 0n)).toBe(0);
+  });
+});
+
+describe("indexer bytea filtering", () => {
+  it("converts an 0x hash to the \\x literal a bytea column filters on", () => {
+    // The API RENDERS 0x… and FILTERS on \x… — passing back what it gave you matches nothing,
+    // silently, because the query is valid and the comparison simply never holds.
+    expect(bytea("0xdeadbeef")).toBe("\\xdeadbeef");
+  });
+
+  it("is idempotent on an already-bare hash", () => {
+    expect(bytea("deadbeef" as `0x${string}`)).toBe("\\xdeadbeef");
   });
 });

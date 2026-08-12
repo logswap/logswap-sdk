@@ -3,7 +3,9 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
-    "lib": ["ES2022"],
+    // DOM is here for fetch/AbortSignal in indexer.ts, not because the SDK touches the document.
+    // Node has had both globally since 18, so this widens the TYPES, not the runtime requirement.
+    "lib": ["ES2022", "DOM"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "declaration": true,
