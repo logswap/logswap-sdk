@@ -158,3 +158,26 @@ export function partitionIds(ids: readonly bigint[]): { positions: bigint[]; cla
 export function describePacked(tickSpacing: bigint, packed: bigint) {
   return unpackFloorCap(tickSpacing, packed);
 }
+
+/**
+ * The QUOTE leg of a position at log-price `x`, in quote units.
+ *
+ * Mirrors the manager's `_assets` exactly, in its three cases:
+ *
+ * - **floor above spot** — the position is all base and holds no quote at all.
+ * - **in range** — `L·(x − ξ)`: the buffer built up as price rose from the floor.
+ * - **capped out** (spot at or above the cap) — `L·(cap − ξ)`, frozen. Past its cap a position
+ *   stops converting, which is what makes a capped position a resting limit order.
+ *
+ * Exact: this is bigint arithmetic throughout, unlike the base leg, which needs `L/p` and is
+ * therefore transcendental. If you need base, read it from the chain rather than approximating it
+ * here — a display-only float has no business being subtracted from a balance.
+ */
+export function positionQuote(
+  p: { L: bigint; floor: bigint; cap: bigint; capped: boolean },
+  x: bigint,
+): bigint {
+  if (p.floor > x) return 0n;
+  const upper = p.capped && p.cap <= x ? p.cap : x;
+  return (p.L * (upper - p.floor)) / 10n ** 18n;
+}

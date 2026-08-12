@@ -1,3 +1,4 @@
+import { positionQuote } from "../src/positions.js";
 import { bytea } from "../src/indexer.js";
 import { annualise, edgeQuote, feesQuote, floorDistance, floorDrawdown, floorDrawdownPrice, floorPrice, lpEdge } from "../src/pools.js";
 /**
@@ -157,5 +158,33 @@ describe("indexer bytea filtering", () => {
 
   it("is idempotent on an already-bare hash", () => {
     expect(bytea("deadbeef" as `0x${string}`)).toBe("\\xdeadbeef");
+  });
+});
+
+describe("position quote leg", () => {
+  const WAD = 10n ** 18n;
+  const L = 1_000_000n * WAD;
+
+  it("is zero when the floor is above spot — the position is all base", () => {
+    expect(positionQuote({ L, floor: WAD / 2n, cap: 0n, capped: false }, 0n)).toBe(0n);
+  });
+
+  it("in range, is L times the distance above the floor", () => {
+    // floor -0.2, spot 0 -> 0.2 * 1,000,000 = 200,000
+    expect(positionQuote({ L, floor: -2n * (WAD / 10n), cap: 0n, capped: false }, 0n)).toBe(200_000n * WAD);
+  });
+
+  it("freezes at the cap once spot passes it", () => {
+    const p = { L, floor: 0n, cap: WAD / 10n, capped: true };
+    // spot 0.05, inside: 0.05 -> 50,000
+    expect(positionQuote(p, WAD / 20n)).toBe(50_000n * WAD);
+    // spot 0.5, well past the 0.1 cap: still only 0.1 -> 100,000, not 500,000
+    expect(positionQuote(p, WAD / 2n)).toBe(100_000n * WAD);
+    expect(positionQuote(p, p.cap)).toBe(100_000n * WAD);
+  });
+
+  it("an uncapped position keeps converting with no ceiling", () => {
+    const p = { L, floor: 0n, cap: 0n, capped: false };
+    expect(positionQuote(p, WAD / 2n)).toBe(500_000n * WAD);
   });
 });
