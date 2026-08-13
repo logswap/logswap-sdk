@@ -197,7 +197,20 @@ export interface TokenInfo {
   decimals: number;
 }
 
-/** Both sides of a market, for labelling and scaling. One call, four reads, cached by the caller. */
+/**
+ * Both sides of a market, for labelling and scaling.
+ *
+ * **Decimals are read from the token and never guessed.** They used to fall back to 18 on any
+ * failure, which quietly reintroduced the worst bug this stack has had: an 18 assumed for a
+ * 6-decimal token is a 10^12 error in a number that goes on to `parseUnits` and becomes a transfer
+ * amount. A wrong scale is indistinguishable from a working app until somebody moves funds, so a
+ * read that will not resolve must fail loudly instead.
+ *
+ * `symbol` keeps a fallback because it is a label: a market shown as `0x5FbD…` is ugly, not wrong.
+ *
+ * Retries first, because a blip on the transport is not the same as a token that has no `decimals`,
+ * and killing a market over one dropped packet is its own kind of wrong.
+ */
 export async function marketTokens(
   c: LogswapClient,
   key: PoolKey,
@@ -206,16 +219,34 @@ export async function marketTokens(
     { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
     { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
   ] as const;
+
+  const readDecimals = async (address: Address): Promise<number> => {
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const d = Number(await c.public.readContract({ address, abi, functionName: "decimals" }));
+        if (!Number.isInteger(d) || d < 0 || d > 36) {
+          throw new Error(`returned ${d}, which is not a plausible decimals value`);
+        }
+        return d;
+      } catch (e) {
+        last = e;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      }
+    }
+    throw new Error(
+      `logswap: could not read decimals() from ${address}. Refusing to assume — every amount for ` +
+        `this token would be scaled wrongly. Cause: ${last instanceof Error ? last.message.split("\n")[0] : String(last)}`,
+    );
+  };
+
   const read = async (address: Address): Promise<TokenInfo> => {
     const [decimals, symbol] = await Promise.all([
-      c.public
-        .readContract({ address, abi, functionName: "decimals" })
-        .then(Number)
-        .catch(() => 18),
+      readDecimals(address),
       c.public
         .readContract({ address, abi, functionName: "symbol" })
         .then(String)
-        .catch(() => address.slice(0, 6)),
+        .catch(() => address.slice(0, 6)), // a label, not a scale — safe to approximate
     ]);
     return { address, symbol, decimals };
   };
