@@ -15,6 +15,7 @@
 import { formatUnits, type Address, type Hex } from "viem";
 import { logswapLensAbi, logswapManagerAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
+import { readCachedToken, registerCacheClear, writeCachedToken } from "./tokencache.js";
 import { poolId, type PoolKey } from "./keys.js";
 
 /** The manager's `getPool` view, decoded. Field-for-field with `PoolView` in the contract. */
@@ -210,6 +211,10 @@ export interface TokenInfo {
  *
  * Retries first, because a blip on the transport is not the same as a token that has no `decimals`,
  * and killing a market over one dropped packet is its own kind of wrong.
+ *
+ * **Cached** per (chain, address) — see `tokencache.ts` for why only successes are stored and why
+ * the chain id is part of the key. Concurrent calls for the same token share one read, which
+ * matters because the quote asset is usually the same across every market in a deployment.
  */
 export async function marketTokens(
   c: LogswapClient,
@@ -219,6 +224,8 @@ export async function marketTokens(
     { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
     { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
   ] as const;
+
+  const chainId = c.public.chain?.id ?? (await c.public.getChainId());
 
   const readDecimals = async (address: Address): Promise<number> => {
     let last: unknown;
@@ -241,18 +248,51 @@ export async function marketTokens(
   };
 
   const read = async (address: Address): Promise<TokenInfo> => {
-    const [decimals, symbol] = await Promise.all([
-      readDecimals(address),
-      c.public
-        .readContract({ address, abi, functionName: "symbol" })
-        .then(String)
-        .catch(() => address.slice(0, 6)), // a label, not a scale — safe to approximate
-    ]);
-    return { address, symbol, decimals };
+    const hit = readCachedToken(chainId, address);
+    if (hit) return { address, ...hit };
+
+    const inflight = pending.get(`${chainId}:${address.toLowerCase()}`);
+    if (inflight) return inflight;
+
+    const k = `${chainId}:${address.toLowerCase()}`;
+    // Deregistration happens INSIDE the job, so it completes before the promise settles. Cleaning
+    // up in a `.finally()` on the outside runs a microtask later — late enough that a caller
+    // arriving right after an `await` could still attach to a job that has already failed and
+    // inherit a failure a fresh read would not have hit. Sharing an in-flight read is an
+    // optimisation for concurrent callers; it must never make a later, separate call fail.
+    // `| undefined` because the assignment below is what tsc cannot see happening first; the
+    // finally only runs after an await, so by then it is set.
+    let self: Promise<TokenInfo> | undefined;
+    const job = (async (): Promise<TokenInfo> => {
+      try {
+        // `symbol` is allowed to fail; `decimals` is not. Caught separately so a missing symbol
+        // does not discard a decimals read that succeeded.
+        const [decimals, symbolResult] = await Promise.all([
+          readDecimals(address),
+          c.public
+            .readContract({ address, abi, functionName: "symbol" })
+            .then((v) => ({ ok: true as const, value: String(v) }))
+            .catch(() => ({ ok: false as const, value: address.slice(0, 6) })),
+        ]);
+        // Only a real symbol is cached. Persisting the 0x… fallback would let one blip name the
+        // token that for as long as the store lives.
+        if (symbolResult.ok) writeCachedToken(chainId, address, { symbol: symbolResult.value, decimals });
+        return { address, symbol: symbolResult.value, decimals };
+      } finally {
+        if (pending.get(k) === self) pending.delete(k);
+      }
+    })();
+    self = job;
+    pending.set(k, job);
+    return job;
   };
   const [base, quote] = await Promise.all([read(key.base), read(key.quote)]);
   return { base, quote };
 }
+
+/** In-flight reads, so simultaneous callers for one token share a single round trip. */
+const pending = new Map<string, Promise<TokenInfo>>();
+registerCacheClear(() => pending.clear());
 
 /** Format a quote-denominated amount for display, given the quote's decimals. */
 export function formatQuote(amount: bigint, quoteDecimals: number): string {
