@@ -8,9 +8,11 @@
  * is read on-chain, rather than trusting a number that was true at index time.
  */
 
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import type { LogswapClient } from "./client.js";
 import { getPositionClass } from "./positions.js";
+import { discoverMarkets, type DiscoveredMarket } from "./pools.js";
+import { poolId, type PoolKey } from "./keys.js";
 
 export interface IndexerError {
   message: string;
@@ -118,4 +120,71 @@ export async function indexerHealthy(url: string, signal?: AbortSignal): Promise
   } catch {
     return false;
   }
+}
+
+/**
+ * Markets, from the indexer rather than a log scan.
+ *
+ * `discoverMarkets` reads `Initialize` logs straight from the node, which is correct until the node
+ * stops keeping them. anvil's `--prune-history` drops historical transactions and receipts beyond a
+ * window, so on a devnet that mines steadily the deployment's own logs age out and a scan from
+ * block 0 returns nothing — while the contracts remain perfectly alive. Any real chain has the same
+ * shape in a different form: archive-depth `getLogs` is exactly what public RPCs refuse.
+ *
+ * An indexer does not have that problem, because it recorded the event when it happened. This is
+ * the more durable path and should be preferred wherever an indexer is configured, with the log
+ * scan as the fallback for when it is not.
+ *
+ * `Initialize` carries every field of the `PoolKey`, so the key is rebuilt exactly and `poolId` is
+ * recomputed locally rather than trusted from the row — the same offline derivation the SDK uses
+ * everywhere else, so a wrong id fails loudly instead of addressing the wrong pool.
+ */
+export async function discoverMarketsIndexed(url: string, signal?: AbortSignal): Promise<DiscoveredMarket[]> {
+  const q = `{ allInitializes(first: 1000) { nodes {
+    poolId base quote tickSpacing phiMin kappa alpha x0 blockNumber txHash
+  } } }`;
+  type Row = {
+    poolId: Hex; base: Hex; quote: Hex; tickSpacing: string; phiMin: string;
+    kappa: string; alpha: string; x0: string; blockNumber: string; txHash: Hex;
+  };
+  const d = await gql<{ allInitializes: { nodes: Row[] } }>(url, q, undefined, signal);
+  return d.allInitializes.nodes.map((n) => {
+    const key: PoolKey = {
+      base: n.base as Address,
+      quote: n.quote as Address,
+      tickSpacing: BigInt(n.tickSpacing),
+      phiMin: BigInt(n.phiMin),
+      kappa: BigInt(n.kappa),
+      alpha: BigInt(n.alpha),
+    };
+    return {
+      key,
+      poolId: poolId(key),
+      x0: BigInt(n.x0),
+      blockNumber: BigInt(n.blockNumber),
+      transactionHash: n.txHash,
+    };
+  });
+}
+
+/**
+ * Markets, preferring the indexer and falling back to a log scan.
+ *
+ * The order matters: the indexer is authoritative for history, the node is authoritative for state.
+ * A market the node can no longer tell you about is still a market.
+ */
+export async function discoverMarketsBest(
+  c: LogswapClient,
+  url: string | undefined,
+  signal?: AbortSignal,
+): Promise<{ markets: DiscoveredMarket[]; source: "indexer" | "chain" }> {
+  if (url) {
+    try {
+      const markets = await discoverMarketsIndexed(url, signal);
+      if (markets.length) return { markets, source: "indexer" };
+    } catch {
+      /* fall through — a missing indexer must not cost you the market list */
+    }
+  }
+  return { markets: await discoverMarkets(c), source: "chain" };
 }
