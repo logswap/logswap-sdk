@@ -16,8 +16,9 @@ export default defineConfig({
   plugins: [
     foundry({
       project: "contracts",
-      // Exactly the three deployments, and nothing else — the whole protocol is these.
-      include: ["LogswapManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**"],
+      // The singleton stack plus BasketPool — the homogeneous-claims sibling deployed beside it.
+      // Its zaps live in LogswapRouter (one router, one Permit2 spender), so no fifth entry.
+      include: ["LogswapManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "BasketPool.sol/**"],
     }),
   ],
 });
