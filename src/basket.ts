@@ -4,7 +4,7 @@
  * The other primitive. `LogswapManager` gives every position its own floor on a tick ladder;
  * `BasketPool` gives every share the SAME floor and deletes the ladder, the accumulators and the
  * per-position accounting with it. Reading the two side by side is the fastest way to understand
- * either (logswap-docs:docs/basket-pool.md).
+ * either (logswap-docs:docs/multi/basket-pool.md).
  *
  * **It is addressed by ADDRESS, not by key.** A market in the manager is a `PoolKey` — there is no
  * deployment. A basket pool is one contract per pool, so callers hold its address. That asymmetry
