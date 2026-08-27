@@ -41,6 +41,11 @@ jobs:
         run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/unimodularxyz/logswap-contract.git" >> "$GITHUB_ENV"
 
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1 — old pin predated foundryup's binary installer and died with 'cannot execute binary file'
+        with:
+          # 1.8.0 breaks 'forge build --root' relative-import resolution (fails even
+          # forge-std's own ./Vm.sol). 1.7.1 is what the SDK is verified against
+          # locally; upgrade this pin deliberately, with a green run.
+          version: v1.7.1
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
