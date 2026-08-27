@@ -23,7 +23,7 @@
  * `addresses.router`.
  */
 
-import type { Address, Hex } from "viem";
+import { toFunctionSelector, type Address, type Hex } from "viem";
 import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 
@@ -361,4 +361,100 @@ export async function approveRouterForFPool(c: LogswapClient, account: Address) 
     account,
   } as never);
   return wallet.writeContract(request as never);
+}
+
+// ─── ids ──────────────────────────────────────────────────────────────────────
+//
+// One ERC-6909 space, split structurally on bit 255 — the C manager's scheme. Derived here rather
+// than read from the chain: it is pure, and a client that has to call to learn an id cannot build
+// a multicall that uses it.
+
+/** The ERC-6909 id carrying a pool's shares. Bit 255 set. */
+export function fPoolShareId(poolId: Hex): bigint {
+  return (1n << 255n) | (BigInt(poolId) >> 1n);
+}
+
+/** The ERC-6909 id carrying claims on a token. Bit 255 clear, so it can never meet a share id. */
+export function fPoolClaimId(token: Address): bigint {
+  return BigInt(token);
+}
+
+export async function fPoolShareBalance(c: LogswapClient, poolId: Hex, owner: Address): Promise<bigint> {
+  return c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "balanceOf",
+    args: [owner, fPoolShareId(poolId)],
+  } as never) as Promise<bigint>;
+}
+
+export async function fPoolClaimBalance(c: LogswapClient, token: Address, owner: Address): Promise<bigint> {
+  return c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "balanceOf",
+    args: [owner, fPoolClaimId(token)],
+  } as never) as Promise<bigint>;
+}
+
+// ─── the quoter ───────────────────────────────────────────────────────────────
+
+export enum FPoolQuoteKind {
+  QuoteIn = 0,
+  BaseIn = 1,
+  BaseForBase = 2,
+}
+
+/**
+ * An EXACT quote — what execution returns, not an estimate.
+ *
+ * `quoteSwap` runs the real swap and reverts with the answer, so the value has to be decoded out
+ * of the revert rather than returned. That is the point of the pattern: there is no second pricing
+ * path to drift from the first. It needs no tokens, no approvals and no balance, so it works from
+ * a disconnected wallet — unlike `fPoolPreviewZapIn`, which is a genuine upper bound.
+ */
+export async function fPoolQuoteSwap(
+  c: LogswapClient,
+  a: { poolId: Hex; kind: FPoolQuoteKind; j: number; k?: number; amountIn: bigint },
+): Promise<bigint> {
+  try {
+    await c.public.simulateContract({
+      address: c.addresses.fPoolManager!,
+      abi: fPoolManagerAbi,
+      functionName: "quoteSwap",
+      args: [a.poolId, a.kind, BigInt(a.j), BigInt(a.k ?? 0), a.amountIn],
+    } as never);
+  } catch (err) {
+    const hit = findQuoteResult(err);
+    if (hit !== null) return hit;
+    throw err; // a real revert — the floor stop, a bad leg — belongs to the caller
+  }
+  throw new Error("logswap: quoteSwap returned without reverting, which it must never do");
+}
+
+/**
+ * `QuoteResult(uint256)` — selector then one word. viem nests the revert data several layers deep
+ * depending on the transport, so walk for it rather than guessing the shape.
+ *
+ * The selector is DERIVED, not written down. A hardcoded one is wrong silently: the decode simply
+ * never matches and every quote rethrows as if the swap had failed.
+ */
+function findQuoteResult(err: unknown): bigint | null {
+  const SELECTOR = toFunctionSelector("QuoteResult(uint256)");
+  const seen = new Set<unknown>();
+  const walk = (e: unknown): bigint | null => {
+    if (!e || typeof e !== "object" || seen.has(e)) return null;
+    seen.add(e);
+    const anyE = e as Record<string, unknown>;
+    const data = anyE.data;
+    if (typeof data === "string" && data.startsWith(SELECTOR) && data.length >= 10 + 64) {
+      return BigInt("0x" + data.slice(10, 10 + 64));
+    }
+    for (const k of ["cause", "walk", "error", "details"]) {
+      const found = walk(anyE[k]);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return walk(err);
 }
