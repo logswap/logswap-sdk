@@ -47,7 +47,7 @@ try {
   c = createLogswapClient({
     public: pub,
     wallet,
-    addresses: { manager: d.manager, router: d.router, lens: d.lens, permit2: d.permit2 },
+    addresses: { cPoolManager: d.cPoolManager, router: d.router, lens: d.lens, permit2: d.permit2, fPoolManager: d.fPoolManager },
   });
   const markets = await discoverMarkets(c);
   key = markets.find((m) => m.poolId === d.poolId)!.key;

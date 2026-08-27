@@ -13,7 +13,7 @@
  */
 
 import { formatUnits, type Address, type Hex } from "viem";
-import { logswapLensAbi, logswapManagerAbi } from "./generated.js";
+import { logswapLensAbi, cPoolManagerAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 import { readCachedToken, registerCacheClear, writeCachedToken } from "./tokencache.js";
 import { poolId, type PoolKey } from "./keys.js";
@@ -42,8 +42,8 @@ export interface PoolState {
 /** Read a market's full state by key. */
 export async function getPool(c: LogswapClient, key: PoolKey): Promise<PoolState> {
   const v = await c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "getPool",
     args: [poolId(key)],
   });
@@ -53,8 +53,8 @@ export async function getPool(c: LogswapClient, key: PoolKey): Promise<PoolState
 /** The effective fee right now: $\max(\phi_{\min}, \kappa\sqrt{\sigma^2_{\text{ema}}})$, capped. */
 export async function phiEff(c: LogswapClient, key: PoolKey): Promise<bigint> {
   return c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "phiEff",
     args: [key],
   }) as Promise<bigint>;
@@ -106,12 +106,12 @@ export async function discoverMarkets(
 ): Promise<DiscoveredMarket[]> {
   // Narrow the const ABI to the Initialize entry while KEEPING its literal type, so viem can infer
   // the log shape. `as never` would compile but collapse every arg to `never` at the call site.
-  type Ev = Extract<(typeof logswapManagerAbi)[number], { type: "event"; name: "Initialize" }>;
-  const ev = logswapManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Initialize");
+  type Ev = Extract<(typeof cPoolManagerAbi)[number], { type: "event"; name: "Initialize" }>;
+  const ev = cPoolManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Initialize");
   if (!ev) throw new Error("logswap: Initialize event missing from the generated ABI");
 
   const logs = await c.public.getLogs({
-    address: c.addresses.manager,
+    address: c.addresses.cPoolManager,
     event: ev,
     args: { base: opts.base, quote: opts.quote },
     fromBlock: opts.fromBlock ?? 0n,

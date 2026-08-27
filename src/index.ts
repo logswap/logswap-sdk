@@ -1,5 +1,5 @@
 /**
- * Logswap SDK — typed, offline-first helpers over the LogswapManager / Router / Lens surface.
+ * Logswap SDK — typed, offline-first helpers over the CPoolManager / Router / Lens surface.
  *
  * The manager/router/lens split is an EIP-170 artifact, not a design boundary, so it is hidden
  * here: callers address markets by `PoolKey` and never choose a contract. A future re-homing of

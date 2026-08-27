@@ -11,8 +11,9 @@
 import type { Address, PublicClient, WalletClient } from "viem";
 
 export interface LogswapAddresses {
-  /** The singleton. ERC-6909 positions and token claims live here. */
-  manager: Address;
+  /** The C singleton — a floor per position, on a tick ladder. ERC-6909 positions and token
+   *  claims live here. */
+  cPoolManager: Address;
   /** User entry for every market: multicall, blended mint, zap, routes, Permit2. */
   router: Address;
   /** Read-only: ladder derivations and revert-quoter previews. */
@@ -50,15 +51,15 @@ export function createLogswapClient(args: {
 export const EXPECTED_VERSION = 1n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
-  const { logswapManagerAbi } = await import("./generated.js");
+  const { cPoolManagerAbi } = await import("./generated.js");
   const got = await c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "version",
   });
   if (got !== expected) {
     throw new Error(
-      `logswap: manager at ${c.addresses.manager} reports version ${got}, but this SDK was built ` +
+      `logswap: manager at ${c.addresses.cPoolManager} reports version ${got}, but this SDK was built ` +
         `against version ${expected}. Upgrade the SDK or point at the matching deployment.`,
     );
   }

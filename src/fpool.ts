@@ -1,7 +1,7 @@
 /**
  * fpool.ts — the `FPoolManager` surface: n bases, one quote, one shared floor.
  *
- * The other primitive. `LogswapManager` gives every position its own floor on a tick ladder;
+ * The other primitive. `CPoolManager` gives every position its own floor on a tick ladder;
  * `FPoolManager` gives every share the SAME floor and deletes the ladder, the accumulators and the
  * per-position accounting with it. Reading the two side by side is the fastest way to understand
  * either (logswap-docs:docs/multi/f-pool.md).

@@ -7,7 +7,7 @@
  */
 
 import type { Address, Hash } from "viem";
-import { logswapManagerAbi, logswapRouterAbi } from "./generated.js";
+import { cPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 import type { PoolKey } from "./keys.js";
 import { isPosition } from "./ids.js";
@@ -54,8 +54,8 @@ export async function claimFees(c: LogswapClient, a: ClaimFeesArgs): Promise<Has
 export async function approveRouterAsOperator(c: LogswapClient, approved = true): Promise<Hash> {
   const { account } = requireWallet(c);
   return c.wallet!.writeContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "setOperator",
     args: [c.addresses.router, approved],
     account,
@@ -66,8 +66,8 @@ export async function approveRouterAsOperator(c: LogswapClient, approved = true)
 /** Is the router already an operator for `owner`? Check before prompting for a signature. */
 export async function isRouterApproved(c: LogswapClient, owner: Address): Promise<boolean> {
   return c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "isOperator",
     args: [owner, c.addresses.router],
   }) as Promise<boolean>;

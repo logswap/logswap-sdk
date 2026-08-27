@@ -7,7 +7,7 @@
  */
 
 import type { Address } from "viem";
-import { logswapLensAbi, logswapManagerAbi } from "./generated.js";
+import { logswapLensAbi, cPoolManagerAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 import { poolId, type PoolKey } from "./keys.js";
 import { isPosition, NO_CAP, positionId, unpackFloorCap } from "./ids.js";
@@ -26,8 +26,8 @@ export interface PositionClass {
 
 export async function getPositionClass(c: LogswapClient, id: bigint): Promise<PositionClass> {
   const r = (await c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "positions",
     args: [id],
   })) as readonly [bigint, bigint, bigint, bigint];
@@ -37,8 +37,8 @@ export async function getPositionClass(c: LogswapClient, id: bigint): Promise<Po
 /** A holder's share balance in a class. */
 export async function balanceOf(c: LogswapClient, owner: Address, id: bigint): Promise<bigint> {
   return c.public.readContract({
-    address: c.addresses.manager,
-    abi: logswapManagerAbi,
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
     functionName: "balanceOf",
     args: [owner, id],
   }) as Promise<bigint>;

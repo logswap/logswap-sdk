@@ -37,10 +37,11 @@ try {
   c = createLogswapClient({
     public: pub,
     addresses: {
-      manager: deployment.manager as Address,
+      cPoolManager: deployment.cPoolManager as Address,
       router: deployment.router as Address,
       lens: deployment.lens as Address,
       permit2: deployment.permit2 as Address,
+      fPoolManager: deployment.fPoolManager as Address,
     },
   });
   key = {

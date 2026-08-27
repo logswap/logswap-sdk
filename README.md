@@ -1,7 +1,7 @@
 # logswap-sdk
 
 TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract) — typed wrappers over the
-`LogswapManager` / `LogswapRouter` / `LogswapLens` surface.
+`CPoolManager` / `LogswapRouter` / `LogswapLens` surface.
 
 **Status: identity, reads and writes.** Indexer and app next.
 
