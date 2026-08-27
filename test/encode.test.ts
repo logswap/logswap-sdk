@@ -123,15 +123,16 @@ describe("every C write helper encodes against the generated ABI", () => {
 });
 
 describe("every F write helper encodes against the generated ABI", () => {
-  // These seven are the regression: each encoded one argument short until writeFPool
-  // prepended poolId. Any arity drift in the manager lands here first.
-  it("all three swaps", async () => {
+  // The seven F writes are the regression class: each once encoded an argument short. The three
+  // swaps now route through the ROUTER's overloaded swapExactIn — this also pins viem's overload
+  // resolution to the F arity (8 args) rather than the C one (6).
+  it("all three swaps resolve the router's swapExactIn overload", async () => {
     const { c, encoded } = fakeClient();
     await expect(fPoolSwapQuoteIn(c, { poolId: POOL, j: 0, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSwapBaseIn(c, { poolId: POOL, j: 1, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSwapBaseForBase(c, { poolId: POOL, j: 0, k: 1, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
     // each write encodes twice — at simulate and at send — so assert coverage, not multiplicity
-    expect(new Set(encoded)).toEqual(new Set(["swapQuoteIn", "swapBaseIn", "swapBaseForBase"]));
+    expect(new Set(encoded)).toEqual(new Set(["swapExactIn"]));
   });
   it("mint / burn", async () => {
     const { c } = fakeClient();

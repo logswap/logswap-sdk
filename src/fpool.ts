@@ -186,27 +186,43 @@ export interface FPoolSwapArgs {
   j: number;
   amountIn: bigint;
   minOut?: bigint;
+  /** Who receives the out leg. Defaults to the account. */
+  to?: Address;
+  /** Absolute unix seconds. Defaulted to a bounded window, as every router write is. */
+  deadline?: bigint;
   account: Address;
 }
 
+/**
+ * All three F swaps go through the ROUTER's `swapExactIn` overload — the same surface as a C
+ * swap: Permit2 pull, `minOut`, recipient, deadline. The manager's direct `swapQuoteIn` etc.
+ * remain callable (plain allowance to the manager, settle to caller) but are the primitive's
+ * interface, not the SDK's: routing everywhere is what keeps the two pools identical to use.
+ */
+function fSwap(c: LogswapClient, a: FPoolSwapArgs, kind: FPoolQuoteKind, k = 0) {
+  return writeRouter(
+    c,
+    "swapExactIn",
+    [a.poolId, kind, BigInt(a.j), BigInt(k), a.amountIn, a.minOut ?? 0n, a.to ?? a.account, a.deadline ?? defaultDeadline()],
+    a.account,
+  );
+}
+
 export async function fPoolSwapQuoteIn(c: LogswapClient, a: FPoolSwapArgs) {
-  return writeFPool(c, a.poolId, "swapQuoteIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
+  return fSwap(c, a, FPoolQuoteKind.QuoteIn);
 }
 
 export async function fPoolSwapBaseIn(c: LogswapClient, a: FPoolSwapArgs) {
-  return writeFPool(c, a.poolId, "swapBaseIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
+  return fSwap(c, a, FPoolQuoteKind.BaseIn);
 }
 
 /**
- * Base j → base k, direct. Needs no quote, works at Q = 0, and cannot cross the floor: X is held
+ * Base j → base k. Needs no quote, works at Q = 0, and cannot cross the floor: X is held
  * exactly up to the in-kind fee. Note it moves BOTH quote prices — p_j down, p_k up — because the
  * pool has one coordinate per asset and every trade moves at least one.
  */
-export async function fPoolSwapBaseForBase(
-  c: LogswapClient,
-  a: Omit<FPoolSwapArgs, "j"> & { j: number; k: number },
-) {
-  return writeFPool(c, a.poolId, "swapBaseForBase", [BigInt(a.j), BigInt(a.k), a.amountIn, a.minOut ?? 0n], a.account);
+export async function fPoolSwapBaseForBase(c: LogswapClient, a: FPoolSwapArgs & { k: number }) {
+  return fSwap(c, a, FPoolQuoteKind.BaseForBase, a.k);
 }
 
 // ─── liquidity ────────────────────────────────────────────────────────────────
