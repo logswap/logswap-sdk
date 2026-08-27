@@ -23,7 +23,7 @@
  * `addresses.router`.
  */
 
-import { toFunctionSelector, type Address, type Hex } from "viem";
+import { toFunctionSelector, type Address, type Hash, type Hex } from "viem";
 import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 
@@ -316,7 +316,10 @@ async function writeFPool(c: LogswapClient, poolId: Hex, functionName: string, a
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
     functionName,
-    args,
+    // Every manager write is keyed by poolId as its FIRST parameter; prepending it here, in the
+    // one place all seven helpers share, is what keeps a caller from ever omitting it. The `as
+    // never` casts blind tsc to arg counts, so this file's encode test is the real guard.
+    args: [poolId, ...args],
     account,
   } as never);
   return wallet.writeContract(request as never);
@@ -332,6 +335,38 @@ async function writeRouter(c: LogswapClient, functionName: string, args: unknown
     account,
   } as never);
   return wallet.writeContract(request as never);
+}
+
+// ─── token readiness (two pull paths, not one) ────────────────────────────────
+//
+// The F screens have TWO spenders to satisfy, and confusing them was a shipped bug. Direct
+// manager calls (swaps, mint, burn) pull with plain `transferFrom`, so the MANAGER needs an
+// ERC-20 allowance. The router's zaps pull through Permit2 when the deployment carries one, so a
+// plain approval to the router does nothing there and the zap reverts `NotAllowed()` — that leg
+// is `onboardToken`'s job. This helper covers the manager leg; a UI needs both.
+
+/** Plain ERC-20 approval to the F manager — the allowance every DIRECT call pulls against. */
+export async function approveTokenForFPoolManager(c: LogswapClient, token: Address): Promise<Hash> {
+  const wallet = requireWallet(c);
+  return c.wallet!.writeContract({
+    address: token,
+    abi: [{ type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ name: "s", type: "address" }, { name: "a", type: "uint256" }], outputs: [{ type: "bool" }] }],
+    functionName: "approve",
+    args: [c.addresses.fPoolManager!, (1n << 256n) - 1n],
+    account: wallet.account,
+    chain: c.wallet!.chain,
+  } as never);
+}
+
+/** Does `owner` have enough allowance on `token` for the MANAGER to pull `need`? */
+export async function fPoolManagerAllowanceOk(c: LogswapClient, token: Address, owner: Address, need: bigint): Promise<boolean> {
+  const allowance = (await c.public.readContract({
+    address: token,
+    abi: [{ type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "o", type: "address" }, { name: "s", type: "address" }], outputs: [{ type: "uint256" }] }],
+    functionName: "allowance",
+    args: [owner, c.addresses.fPoolManager!],
+  } as never)) as bigint;
+  return allowance >= need;
 }
 
 // ─── ERC-6909 operator (zapOut needs it) ──────────────────────────────────────
