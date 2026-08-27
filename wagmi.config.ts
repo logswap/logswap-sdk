@@ -18,7 +18,7 @@ export default defineConfig({
       project: "contracts",
       // The singleton stack plus BasketPool — the homogeneous-claims sibling deployed beside it.
       // Its zaps live in LogswapRouter (one router, one Permit2 spender), so no fifth entry.
-      include: ["LogswapManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "BasketPool.sol/**"],
+      include: ["LogswapManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "FPoolManager.sol/**"],
     }),
   ],
 });

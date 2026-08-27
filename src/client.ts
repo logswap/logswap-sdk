@@ -17,6 +17,11 @@ export interface LogswapAddresses {
   router: Address;
   /** Read-only: ladder derivations and revert-quoter previews. */
   lens: Address;
+  /**
+   * The F-pool singleton — fungible claims, one shared floor, n bases. Optional only because a
+   * deployment predating it will not carry the address; every F-pool call needs it.
+   */
+  fPoolManager?: Address;
   /** Optional — the router falls back to plain approvals when absent. */
   permit2?: Address;
 }

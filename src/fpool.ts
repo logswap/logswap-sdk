@@ -1,37 +1,38 @@
 /**
- * basket.ts — the `BasketPool` surface: n bases, one quote, one shared floor.
+ * fpool.ts — the `FPoolManager` surface: n bases, one quote, one shared floor.
  *
  * The other primitive. `LogswapManager` gives every position its own floor on a tick ladder;
- * `BasketPool` gives every share the SAME floor and deletes the ladder, the accumulators and the
+ * `FPoolManager` gives every share the SAME floor and deletes the ladder, the accumulators and the
  * per-position accounting with it. Reading the two side by side is the fastest way to understand
- * either (logswap-docs:docs/multi/basket-pool.md).
+ * either (logswap-docs:docs/multi/f-pool.md).
  *
- * **It is addressed by ADDRESS, not by key.** A market in the manager is a `PoolKey` — there is no
- * deployment. A basket pool is one contract per pool, so callers hold its address. That asymmetry
- * is real and the SDK does not hide it; hiding it would mean inventing a registry the chain does
- * not have.
+ * **A pool is an ID, not an address.** Both primitives are singletons now, so neither has a
+ * per-pool deployment — but they are addressed differently and for a reason. The C manager rides
+ * its whole `PoolKey` in calldata because that key is small, fixed and wholly needed. An F-pool
+ * key is variable-length and only ever partially needed (no swap path is O(n)), so it is stored
+ * once at `initialize` and every later call names `(poolId, j)`. Callers hold a `bytes32`.
  *
  * **Two products, one contract.** The basket (n > 1, public authority) and the launch (n = 1, the
  * creator alone on the lever) are the same bytecode under different settings — what separates them
- * is who holds `authority` and how many bases there are, and nothing in the maths. `describeBasket`
+ * is who holds `authority` and how many bases there are, and nothing in the maths. `describeFPool`
  * below reports which shape a given pool is, because a UI has to decide what to render.
  *
  * **Zaps live on the ROUTER, not here.** Permit2 is AllowanceTransfer mode, whose standing
  * allowance is keyed by spender, so a second router would cost the user an allowance per token
- * twice, forever. One router is one spender — see `basketZapIn`/`basketZapOut` below, which target
+ * twice, forever. One router is one spender — see `fPoolZapIn`/`fPoolZapOut` below, which target
  * `addresses.router`.
  */
 
-import type { Address } from "viem";
-import { basketPoolAbi, logswapRouterAbi } from "./generated.js";
+import type { Address, Hex } from "viem";
+import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 
 const WAD = 10n ** 18n;
 
 /** Everything scalar about a basket pool, in one round trip's worth of reads. */
-export interface BasketState {
-  /** The pool's own address — a basket is a deployment, unlike a manager market. */
-  address: Address;
+export interface FPoolState {
+  /** The pool's id — the hash of its key. There is no per-pool address. */
+  poolId: Hex;
   quote: Address;
   bases: Address[];
   /** WAD weights, summing to WAD. `L_j = w_j · L`. */
@@ -64,41 +65,54 @@ export interface BasketState {
 }
 
 /** Read a basket pool whole. Batched — viem multicalls these when the transport allows. */
-export async function getBasket(c: LogswapClient, pool: Address): Promise<BasketState> {
+export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolState> {
   // viem types `functionName` as a literal union; this reader is deliberately generic, so the
-  // cast lives here once rather than at each of the twenty call sites below.
-  const rd = <T>(functionName: string, args: readonly unknown[] = []) =>
-    c.public.readContract({ address: pool, abi: basketPoolAbi, functionName, args } as never) as Promise<T>;
+  // cast lives here once rather than at each call site below.
+  const rd = <T>(functionName: string, args: readonly unknown[]) =>
+    c.public.readContract({
+      address: c.addresses.fPoolManager!,
+      abi: fPoolManagerAbi,
+      functionName,
+      args,
+    } as never) as Promise<T>;
 
-  const n = Number(await rd<bigint>("n"));
+  // `getPool` returns the whole scalar struct in one call — the singleton's shape makes what used
+  // to be a dozen getters a single read.
+  const p = await rd<{
+    quote: Address;
+    phi: bigint;
+    authority: Address;
+    feesOnly: boolean;
+    seeded: boolean;
+    dissolved: boolean;
+    n: number;
+    Q: bigint;
+    L: bigint;
+    shares: bigint;
+    theta0: bigint;
+    bigSigma: bigint;
+    leverTheta: bigint;
+  }>("getPool", [poolId]);
+
+  const n = Number(p.n);
   const idx = Array.from({ length: n }, (_, i) => BigInt(i));
-
-  const [quote, Q, L, phi, theta0, theta, compositeX, bigSigma, authority, feesOnly, seeded, dissolved, totalSupply] =
-    await Promise.all([
-      rd<Address>("quote"),
-      rd<bigint>("Q"),
-      rd<bigint>("L"),
-      rd<bigint>("phi"),
-      rd<bigint>("theta0"),
-      rd<bigint>("theta"),
-      rd<bigint>("compositeX"),
-      rd<bigint>("bigSigma"),
-      rd<Address>("authority"),
-      rd<boolean>("feesOnly"),
-      rd<boolean>("seeded"),
-      rd<boolean>("dissolved"),
-      rd<bigint>("totalSupply"),
-    ]);
-
-  const [bases, weights, x, reserves] = await Promise.all([
-    Promise.all(idx.map((i) => rd<Address>("bases", [i]))),
-    Promise.all(idx.map((i) => rd<bigint>("w", [i]))),
-    Promise.all(idx.map((i) => rd<bigint>("x", [i]))),
-    Promise.all(idx.map((i) => rd<bigint>("reserveOf", [i]))),
+  const [theta, compositeX, legs] = await Promise.all([
+    rd<bigint>("theta", [poolId]),
+    rd<bigint>("compositeX", [poolId]),
+    Promise.all(idx.map((i) => rd<readonly [Address, bigint, bigint, bigint]>("legOf", [poolId, i]))),
   ]);
 
+  const bases = legs.map((l) => l[0]);
+  const weights = legs.map((l) => l[1]);
+  const x = legs.map((l) => l[2]);
+  // the ISOLATION SHADOW, not the derived reserve: what this pool actually holds of the token.
+  // In a singleton the contract's balance backs many pools, so this is the only per-pool figure.
+  const reserves = legs.map((l) => l[3]);
+  const { quote, Q, L, phi, theta0, bigSigma, authority, feesOnly, seeded, dissolved } = p;
+  const totalSupply = p.shares;
+
   return {
-    address: pool,
+    poolId,
     quote,
     bases,
     weights,
@@ -120,10 +134,10 @@ export async function getBasket(c: LogswapClient, pool: Address): Promise<Basket
 }
 
 /** Which of the two products a pool is configured as. A UI has to choose what to render. */
-export type BasketShape = "launch" | "basket";
+export type FPoolShape = "launch" | "basket";
 
-export interface BasketDescription {
-  shape: BasketShape;
+export interface FPoolDescription {
+  shape: FPoolShape;
   /** n = 1 with a private authority is the launch shape (basket-pool §6.5). */
   legs: number;
   /** True when the pool holds no quote: an all-base resting ask. base→quote is the one blocked path. */
@@ -134,9 +148,14 @@ export interface BasketDescription {
   edgePerL: bigint;
 }
 
-export async function describeBasket(c: LogswapClient, s: BasketState): Promise<BasketDescription> {
+export async function describeFPool(c: LogswapClient, s: FPoolState): Promise<FPoolDescription> {
   const rd = <T>(functionName: string) =>
-    c.public.readContract({ address: s.address, abi: basketPoolAbi, functionName } as never) as Promise<T>;
+    c.public.readContract({
+      address: c.addresses.fPoolManager!,
+      abi: fPoolManagerAbi,
+      functionName,
+      args: [s.poolId],
+    } as never) as Promise<T>;
   const [feePerL, edgePerL] = await Promise.all([rd<bigint>("feePerL"), rd<bigint>("edgePerL")]);
   return {
     shape: s.bases.length === 1 ? "launch" : "basket",
@@ -148,12 +167,12 @@ export async function describeBasket(c: LogswapClient, s: BasketState): Promise<
 }
 
 /** `p_j = e^{x_j}`, lossy the way any float conversion is. Compare in log space when it matters. */
-export function basketPriceOf(x: bigint): number {
+export function fPoolPriceOf(x: bigint): number {
   return Math.exp(Number(x) / 1e18);
 }
 
 /** Value per share at the pool's own marks. `V = L + Q`, so this is just that, pro-rated. */
-export function basketShareValue(s: BasketState): bigint {
+export function fPoolShareValue(s: FPoolState): bigint {
   if (s.totalSupply === 0n) return 0n;
   return ((s.L + s.Q) * WAD) / s.totalSupply;
 }
@@ -161,8 +180,8 @@ export function basketShareValue(s: BasketState): bigint {
 // ─── swaps ────────────────────────────────────────────────────────────────────
 // Exact-in only (basket-pool §10). Three paths; the third is the one that makes a basket a basket.
 
-export interface BasketSwapArgs {
-  pool: Address;
+export interface FPoolSwapArgs {
+  poolId: Hex;
   /** Leg index into `bases`. */
   j: number;
   amountIn: bigint;
@@ -170,12 +189,12 @@ export interface BasketSwapArgs {
   account: Address;
 }
 
-export async function basketSwapQuoteIn(c: LogswapClient, a: BasketSwapArgs) {
-  return writeBasket(c, a.pool, "swapQuoteIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
+export async function fPoolSwapQuoteIn(c: LogswapClient, a: FPoolSwapArgs) {
+  return writeFPool(c, a.poolId, "swapQuoteIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
 }
 
-export async function basketSwapBaseIn(c: LogswapClient, a: BasketSwapArgs) {
-  return writeBasket(c, a.pool, "swapBaseIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
+export async function fPoolSwapBaseIn(c: LogswapClient, a: FPoolSwapArgs) {
+  return writeFPool(c, a.poolId, "swapBaseIn", [BigInt(a.j), a.amountIn, a.minOut ?? 0n], a.account);
 }
 
 /**
@@ -183,29 +202,29 @@ export async function basketSwapBaseIn(c: LogswapClient, a: BasketSwapArgs) {
  * exactly up to the in-kind fee. Note it moves BOTH quote prices — p_j down, p_k up — because the
  * pool has one coordinate per asset and every trade moves at least one.
  */
-export async function basketSwapBaseForBase(
+export async function fPoolSwapBaseForBase(
   c: LogswapClient,
-  a: Omit<BasketSwapArgs, "j"> & { j: number; k: number },
+  a: Omit<FPoolSwapArgs, "j"> & { j: number; k: number },
 ) {
-  return writeBasket(c, a.pool, "swapBaseForBase", [BigInt(a.j), BigInt(a.k), a.amountIn, a.minOut ?? 0n], a.account);
+  return writeFPool(c, a.poolId, "swapBaseForBase", [BigInt(a.j), BigInt(a.k), a.amountIn, a.minOut ?? 0n], a.account);
 }
 
 // ─── liquidity ────────────────────────────────────────────────────────────────
 
 /** Deposit dL/L of every reserve, receive shares ∝ dL. θ is untouched by construction. */
-export async function basketMint(
+export async function fPoolMint(
   c: LogswapClient,
-  a: { pool: Address; dL: bigint; maxQuoteIn?: bigint; account: Address },
+  a: { poolId: Hex; dL: bigint; maxQuoteIn?: bigint; account: Address },
 ) {
-  return writeBasket(c, a.pool, "mint", [a.dL, a.maxQuoteIn ?? 2n ** 256n - 1n], a.account);
+  return writeFPool(c, a.poolId, "mint", [a.dL, a.maxQuoteIn ?? 2n ** 256n - 1n], a.account);
 }
 
 /** Burn shares for the pro-rata slice of every reserve. Available at any Q, and after dissolution. */
-export async function basketBurn(
+export async function fPoolBurn(
   c: LogswapClient,
-  a: { pool: Address; shares: bigint; minQuoteOut?: bigint; account: Address },
+  a: { poolId: Hex; shares: bigint; minQuoteOut?: bigint; account: Address },
 ) {
-  return writeBasket(c, a.pool, "burn", [a.shares, a.minQuoteOut ?? 0n], a.account);
+  return writeFPool(c, a.poolId, "burn", [a.shares, a.minQuoteOut ?? 0n], a.account);
 }
 
 // ─── zaps (on the router — one router, one Permit2 spender) ───────────────────
@@ -215,12 +234,12 @@ export async function basketBurn(
  * mint consumes less base than was bought for it and every zap ends with a refund. Size from this
  * and expect change back — do not treat it as exact.
  */
-export async function basketPreviewZapIn(c: LogswapClient, pool: Address, dL: bigint): Promise<bigint> {
+export async function fPoolPreviewZapIn(c: LogswapClient, poolId: Hex, dL: bigint): Promise<bigint> {
   return c.public.readContract({
     address: c.addresses.router,
     abi: logswapRouterAbi,
     functionName: "previewZapIn",
-    args: [pool, dL],
+    args: [poolId, dL],
   } as never) as Promise<bigint>;
 }
 
@@ -232,15 +251,15 @@ export async function basketPreviewZapIn(c: LogswapClient, pool: Address, dL: bi
  * spot, paid for by the existing LPs — 27.4% in basket-pool §6's worked example. Routing it through
  * the curve deletes the subsidy and hands the fee and impact to the incumbents instead.
  */
-export async function basketZapIn(
+export async function fPoolZapIn(
   c: LogswapClient,
-  a: { pool: Address; dL: bigint; maxQuoteIn: bigint; minShares?: bigint; to?: Address; account: Address; deadline?: bigint },
+  a: { poolId: Hex; dL: bigint; maxQuoteIn: bigint; minShares?: bigint; to?: Address; account: Address; deadline?: bigint },
 ) {
   const to = a.to ?? a.account;
   return writeRouter(
     c,
     "zapIn",
-    [a.pool, a.dL, a.maxQuoteIn, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
+    [a.poolId, a.dL, a.maxQuoteIn, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
     a.account,
   );
 }
@@ -252,15 +271,15 @@ export async function basketZapIn(
  * cross the floor; only the burn's own quote slice touches the quote leg. Into the quote every
  * base leg is sold, which is the one path a drained quote leg can block.
  */
-export async function basketZapOut(
+export async function fPoolZapOut(
   c: LogswapClient,
-  a: { pool: Address; shares: bigint; tokenOut: Address; minOut?: bigint; to?: Address; account: Address; deadline?: bigint },
+  a: { poolId: Hex; shares: bigint; tokenOut: Address; minOut?: bigint; to?: Address; account: Address; deadline?: bigint },
 ) {
   const to = a.to ?? a.account;
   return writeRouter(
     c,
     "zapOut",
-    [a.pool, a.shares, a.tokenOut, a.minOut ?? 0n, to, a.deadline ?? defaultDeadline()],
+    [a.poolId, a.shares, a.tokenOut, a.minOut ?? 0n, to, a.deadline ?? defaultDeadline()],
     a.account,
   );
 }
@@ -271,13 +290,13 @@ export async function basketZapOut(
  * Remove quote, lifting θ — price-neutral, pro-rata, no base moves. Under `feesOnly` the lift
  * stops at θ₀, so the authority extracts income and never the proceeds backing the floor.
  */
-export async function basketHarvest(c: LogswapClient, a: { pool: Address; amount: bigint; to?: Address; account: Address }) {
-  return writeBasket(c, a.pool, "harvest", [a.amount, a.to ?? a.account], a.account);
+export async function fPoolHarvest(c: LogswapClient, a: { poolId: Hex; amount: bigint; to?: Address; account: Address }) {
+  return writeFPool(c, a.poolId, "harvest", [a.amount, a.to ?? a.account], a.account);
 }
 
 /** Commit quote, deepening θ. The mark does not move — governance may write θ, never x. */
-export async function basketRefill(c: LogswapClient, a: { pool: Address; amount: bigint; account: Address }) {
-  return writeBasket(c, a.pool, "refill", [a.amount], a.account);
+export async function fPoolRefill(c: LogswapClient, a: { poolId: Hex; amount: bigint; account: Address }) {
+  return writeFPool(c, a.poolId, "refill", [a.amount], a.account);
 }
 
 // ─── internals ────────────────────────────────────────────────────────────────
@@ -291,11 +310,11 @@ function requireWallet(c: LogswapClient) {
   return c.wallet;
 }
 
-async function writeBasket(c: LogswapClient, pool: Address, functionName: string, args: unknown[], account: Address) {
+async function writeFPool(c: LogswapClient, poolId: Hex, functionName: string, args: unknown[], account: Address) {
   const wallet = requireWallet(c);
   const { request } = await c.public.simulateContract({
-    address: pool,
-    abi: basketPoolAbi,
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
     functionName,
     args,
     account,
