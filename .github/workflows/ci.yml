@@ -35,7 +35,7 @@ jobs:
       - name: Configure contracts clone URL (codegen clones logswap-contract via the App token)
         run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/unimodularxyz/logswap-contract.git" >> "$GITHUB_ENV"
 
-      - uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1 — old pin predated foundryup's binary installer and died with 'cannot execute binary file'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
