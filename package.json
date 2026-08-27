@@ -1,7 +1,7 @@
 {
   "name": "@unimodular/logswap-sdk",
   "version": "0.3.0",
-  "description": "TypeScript SDK for Logswap — typed wrappers over the CPoolManager / Router / Lens surface.",
+  "description": "TypeScript SDK for Logswap \u2014 typed wrappers over the CPoolManager / Router / Lens surface.",
   "license": "GPL-2.0-or-later",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,7 +21,7 @@
     "contracts:sync": "bash scripts/sync-contracts.sh",
     "codegen": "npm run contracts:sync && forge build --root contracts && wagmi generate",
     "vectors": "bash scripts/gen-vectors.sh",
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist src/generated.ts",
     "test": "vitest run",
