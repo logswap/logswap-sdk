@@ -333,3 +333,32 @@ async function writeRouter(c: LogswapClient, functionName: string, args: unknown
   } as never);
   return wallet.writeContract(request as never);
 }
+
+// ─── ERC-6909 operator (zapOut needs it) ──────────────────────────────────────
+//
+// The singleton's shares are ERC-6909, so the router cannot `transferFrom` them the way it could
+// an ERC-20 LP token. The holder approves it once as an operator. This is the one place the move
+// off a per-pool ERC-20 costs a user-visible step, so the SDK names it rather than letting the
+// first `fPoolZapOut` revert with something unreadable.
+
+export async function isRouterOperatorForFPool(c: LogswapClient, owner: Address): Promise<boolean> {
+  return c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "isOperator",
+    args: [owner, c.addresses.router],
+  } as never) as Promise<boolean>;
+}
+
+/** Approve the router to move this account's F-pool shares. Needed once, before any `fPoolZapOut`. */
+export async function approveRouterForFPool(c: LogswapClient, account: Address) {
+  const wallet = requireWallet(c);
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "setOperator",
+    args: [c.addresses.router, true],
+    account,
+  } as never);
+  return wallet.writeContract(request as never);
+}
