@@ -138,7 +138,7 @@ export type FPoolShape = "launch" | "basket";
 
 export interface FPoolDescription {
   shape: FPoolShape;
-  /** n = 1 with a private authority is the launch shape (basket-pool §6.5). */
+  /** n = 1 with a private authority is the launch shape (f-pool §6.5). */
   legs: number;
   /** True when the pool holds no quote: an all-base resting ask. base→quote is the one blocked path. */
   atFloor: boolean;
@@ -178,7 +178,7 @@ export function fPoolShareValue(s: FPoolState): bigint {
 }
 
 // ─── swaps ────────────────────────────────────────────────────────────────────
-// Exact-in only (basket-pool §10). Three paths; the third is the one that makes a basket a basket.
+// Exact-in only (f-pool §10). Three paths; the third is the one that makes a basket a basket.
 
 export interface FPoolSwapArgs {
   poolId: Hex;
@@ -264,7 +264,7 @@ export async function fPoolPreviewZapIn(c: LogswapClient, poolId: Hex, dL: bigin
  *
  * The imbalanced part goes through the pool's own curve before anything is minted. That is not a
  * penalty: minting against a quote-only deposit would be a zero-slippage, zero-fee swap at stale
- * spot, paid for by the existing LPs — 27.4% in basket-pool §6's worked example. Routing it through
+ * spot, paid for by the existing LPs — 27.4% in f-pool §6's worked example. Routing it through
  * the curve deletes the subsidy and hands the fee and impact to the incumbents instead.
  */
 export async function fPoolZapIn(
