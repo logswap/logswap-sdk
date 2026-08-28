@@ -174,3 +174,34 @@ describe.skipIf(!live)("F writes against the local deployment", () => {
     await expect(fPoolHarvest(c, { poolId: launch, amount: 1n, account: user })).rejects.toThrow();
   });
 });
+
+describe.skipIf(!live)("F lifecycle and discovery against the local deployment", () => {
+  it("discovers every deployed F pool from logs, shapes included", async () => {
+    const { discoverFPools } = await import("../src/fpool.js");
+    const pools = await discoverFPools(c);
+    expect(pools.length).toBeGreaterThanOrEqual(8); // 2 multi + 6 launches in the fixtures
+    const launches = pools.filter((p) => p.shape === "launch");
+    const baskets = pools.filter((p) => p.shape === "basket");
+    expect(launches.length).toBeGreaterThanOrEqual(6);
+    expect(baskets.length).toBeGreaterThanOrEqual(2);
+    expect(pools.map((p) => p.poolId)).toContain(multi3);
+  });
+
+  it("creates, seeds, trades, hands over, and refuses the wrong authority", async () => {
+    const { fPoolInitialize, fPoolIdOf, fPoolSeed, fPoolSetAuthority } = await import("../src/fpool.js");
+    const st = await getFPool(c, multi3);
+    const shapeArgs = {
+      quote: st.quote, bases: [st.bases[0]!], weights: [10n ** 18n],
+      phi: 10n ** 16n, feesOnly: true, authority: user,
+    };
+    // a fresh phi makes a fresh key/id even with the same legs
+    shapeArgs.phi = 10n ** 16n + BigInt(Date.now() % 1000);
+    await mined(await fPoolInitialize(c, { ...shapeArgs, account: user }));
+    const id = await fPoolIdOf(c, shapeArgs);
+    await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * 10n ** 18n, x0: [0n], Q0: 0n, account: user }));
+    const got = await fPoolQuoteSwap(c, { poolId: id, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 10n * 10n ** 18n });
+    expect(got).toBeGreaterThan(0n);
+    await mined(await fPoolSetAuthority(c, { poolId: id, next: "0x000000000000000000000000000000000000dEaD", account: user }));
+    await expect(fPoolSetAuthority(c, { poolId: id, next: user, account: user })).rejects.toThrow(); // no longer ours
+  });
+});

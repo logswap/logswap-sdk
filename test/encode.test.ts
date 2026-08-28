@@ -24,7 +24,12 @@ import { mint, zapIn, update, move, harvest, burn } from "../src/liquidity.js";
 import { swapExactIn, swapExactOut, swapExactInPath } from "../src/swap.js";
 import { claimFees, approveRouterAsOperator } from "../src/claims.js";
 import { approveToken, approvePermit2ForRouter } from "../src/onboard.js";
+import { initializeMarket } from "../src/pools.js";
 import {
+  fPoolInitialize,
+  fPoolSeed,
+  fPoolDissolve,
+  fPoolSetAuthority,
   fPoolSwapQuoteIn,
   fPoolSwapBaseIn,
   fPoolSwapBaseForBase,
@@ -157,6 +162,22 @@ describe("every F write helper encodes against the generated ABI", () => {
     const { c } = fakeClient();
     await expect(fPoolQuoteSwap(c, { poolId: POOL, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 1n })).resolves.toBe(1n);
     await expect(fPoolQuoteSwap(c, { poolId: POOL, kind: FPoolQuoteKind.BaseForBase, j: 0, k: 1, amountIn: 1n })).resolves.toBe(1n);
+  });
+  it("the lifecycle: initialize / seed / dissolve / setAuthority", async () => {
+    const { c } = fakeClient();
+    await expect(
+      fPoolInitialize(c, {
+        quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n],
+        phi: 10n ** 16n, feesOnly: true, authority: A(0xa), account: A(0xa),
+      }),
+    ).resolves.toBe(HASH);
+    await expect(fPoolSeed(c, { poolId: POOL, L0: 10n ** 21n, x0: [0n, 0n], Q0: 0n, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolSetAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
+  });
+  it("C market creation encodes", async () => {
+    const { c } = fakeClient();
+    await expect(initializeMarket(c, { key: KEY, x0: 0n, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("previewZapIn reads with the right shape", async () => {
     const { c } = fakeClient();

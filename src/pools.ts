@@ -368,3 +368,19 @@ export async function marketOpenedAt(c: LogswapClient, m: DiscoveredMarket): Pro
   const b = await c.public.getBlock({ blockNumber: m.blockNumber });
   return b.timestamp;
 }
+
+/**
+ * Create a C market: `initialize(key, x0)` on the manager — a call, not a deployment. Manager-
+ * direct by design: creation moves no funds, so the router adds nothing. The pool id is
+ * `poolId(key)` (pure) and the market is tradeable immediately; the first mint funds it.
+ */
+export async function initializeMarket(c: LogswapClient, a: { key: PoolKey; x0: bigint; account: Address }) {
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.cPoolManager,
+    abi: cPoolManagerAbi,
+    functionName: "initialize",
+    args: [a.key, a.x0],
+    account: a.account,
+  } as never);
+  return c.wallet!.writeContract(request as never);
+}

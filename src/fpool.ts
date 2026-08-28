@@ -509,3 +509,130 @@ function findQuoteResult(err: unknown): bigint | null {
   };
   return walk(err);
 }
+
+// ─── the pool lifecycle (creation to dissolution) ─────────────────────────────
+//
+// Everything here is MANAGER-DIRECT by design: creation and governance are one-time,
+// authority-gated acts with no pull to route and no slippage to bound, so the router adds
+// nothing and its 128 bytes of EIP-170 margin are not spent on them.
+
+export interface FPoolCreateArgs {
+  quote: Address;
+  /** Legs in any order; sorted (with weights and marks kept aligned) before the call. */
+  bases: Address[];
+  /** WAD each; must sum to 1e18 — validated here so the revert is readable. */
+  weights: bigint[];
+  /** Fixed fee, WAD. The base-for-base fee is pinned at 2φ on-chain. */
+  phi: bigint;
+  /** true: the authority's harvest stops at the seed strike θ₀ (the launch posture). */
+  feesOnly: boolean;
+  authority: Address;
+  account: Address;
+}
+
+/** Sort legs by base address (the key's canonical order), carrying companion arrays along. */
+export function sortFPoolLegs<T>(bases: Address[], ...companions: T[][]): { bases: Address[]; companions: T[][] } {
+  const idx = bases.map((_, i) => i).sort((a, b) => (bases[a]!.toLowerCase() < bases[b]!.toLowerCase() ? -1 : 1));
+  return { bases: idx.map((i) => bases[i]!), companions: companions.map((arr) => idx.map((i) => arr[i]!)) };
+}
+
+/** Create the pool (no funds move — `seed` arms it). Returns the tx hash; read the id with `fPoolIdOf`. */
+export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
+  const sum = a.weights.reduce((x, y) => x + y, 0n);
+  if (sum !== 10n ** 18n) throw new Error(`logswap: weights sum to ${sum}, expected 1e18`);
+  const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority };
+  const wallet = requireWallet(c);
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "initialize",
+    args: [key],
+    account: wallet.account,
+  } as never);
+  return c.wallet!.writeContract(request as never);
+}
+
+/** The pool id is the key's hash — pure, so it can be read before or after creation. */
+export async function fPoolIdOf(c: LogswapClient, a: Omit<FPoolCreateArgs, "account">): Promise<Hex> {
+  const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority };
+  return c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "idOf",
+    args: [key],
+  } as never) as Promise<Hex>;
+}
+
+/**
+ * Arm the pool: deposit the full basket at marks `x0` plus `Q0` of quote. Authority-only on-chain
+ * (an open seed lets anyone front-run the creator for the strike). `x0` must align with the
+ * SORTED bases — use {@link sortFPoolLegs} on (bases, weights, x0) together when building forms.
+ */
+export async function fPoolSeed(
+  c: LogswapClient,
+  a: { poolId: Hex; L0: bigint; x0: bigint[]; Q0: bigint; account: Address },
+) {
+  return writeFPool(c, a.poolId, "seed", [a.L0, a.x0, a.Q0], a.account);
+}
+
+/** End of life. Gated on-chain to the authority and to Q at dust (the raise is not abortable). */
+export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; account: Address }) {
+  return writeFPool(c, a.poolId, "dissolve", [], a.account);
+}
+
+/** Hand the lever to the next authority. Indexed on-chain via AuthoritySet. */
+export async function fPoolSetAuthority(c: LogswapClient, a: { poolId: Hex; next: Address; account: Address }) {
+  return writeFPool(c, a.poolId, "setAuthority", [a.next], a.account);
+}
+
+// ─── discovery from the log stream ────────────────────────────────────────────
+
+export interface DiscoveredFPool {
+  poolId: Hex;
+  quote: Address;
+  bases: Address[];
+  weights: bigint[];
+  phi: bigint;
+  feesOnly: boolean;
+  authority: Address;
+  /** n = 1 is the launch shape; n > 1 the basket. A UI may refine, this is the structural read. */
+  shape: FPoolShape;
+}
+
+/**
+ * Every F pool ever created, from `Initialize` logs alone. Possible only because the event
+ * carries the full key preimage (bases, weights, phi, feesOnly) — the poolId is a hash and could
+ * never be inverted; contracts PR #17 exists for exactly this call.
+ */
+export async function discoverFPools(
+  c: LogswapClient,
+  opts: { fromBlock?: bigint; toBlock?: bigint } = {},
+): Promise<DiscoveredFPool[]> {
+  type Ev = Extract<(typeof fPoolManagerAbi)[number], { type: "event"; name: "Initialize" }>;
+  const ev = fPoolManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Initialize");
+  if (!ev) throw new Error("logswap: F Initialize event missing from the generated ABI");
+  const logs = await c.public.getLogs({
+    address: c.addresses.fPoolManager!,
+    event: ev,
+    fromBlock: opts.fromBlock ?? 0n,
+    toBlock: opts.toBlock ?? "latest",
+  });
+  return logs.map((l) => {
+    const a = l.args as {
+      poolId: Hex; quote: Address; authority: Address; bases: readonly Address[];
+      weights: readonly bigint[]; phi: bigint; feesOnly: boolean;
+    };
+    return {
+      poolId: a.poolId,
+      quote: a.quote,
+      bases: [...a.bases],
+      weights: [...a.weights],
+      phi: a.phi,
+      feesOnly: a.feesOnly,
+      authority: a.authority,
+      shape: a.bases.length === 1 ? "launch" : "basket",
+    };
+  });
+}
