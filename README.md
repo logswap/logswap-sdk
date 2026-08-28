@@ -1,9 +1,10 @@
 # logswap-sdk
 
-TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract) — typed wrappers over the
-`CPoolManager` / `LogswapRouter` / `LogswapLens` surface.
+TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract), the liquidity
+primitive introducing the **logarithmic invariant** — typed wrappers over the `CPoolManager` /
+`FPoolManager` / `LogswapRouter` / `LogswapLens` surface.
 
-**Status: identity, reads and writes.** Indexer and app next.
+**Status: identity, reads and writes for both singletons.** Indexer next.
 
 ## What is here now
 
