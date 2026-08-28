@@ -181,3 +181,29 @@ export function positionQuote(
   const upper = p.capped && p.cap <= x ? p.cap : x;
   return (p.L * (upper - p.floor)) / 10n ** 18n;
 }
+
+/**
+ * Every UNCAPPED position `owner` holds in a market, enumerated fully on-chain by the lens — a
+ * bitmap walk plus a balance check per live floor. No indexer, no log scan. Capped classes are
+ * not listed here by contract (their candidate set is quadratic in live ticks); they come from
+ * `IdRegistered` replay when an indexer exists.
+ */
+export interface HeldPositionRow {
+  id: bigint;
+  floor: bigint;
+  shares: bigint;
+  /** The holder's slice of the class's exposure. */
+  L: bigint;
+  /** Claimable now, quote units. */
+  fees: bigint;
+}
+
+export async function positionsOf(c: LogswapClient, key: PoolKey, owner: Address): Promise<HeldPositionRow[]> {
+  const rows = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "positionsOf",
+    args: [key, owner],
+  } as never)) as readonly { id: bigint; floor: bigint; shares: bigint; L: bigint; fees: bigint }[];
+  return rows.map((r) => ({ id: r.id, floor: r.floor, shares: r.shares, L: r.L, fees: r.fees }));
+}
