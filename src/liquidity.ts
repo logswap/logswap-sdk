@@ -17,7 +17,7 @@ import { logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 import { poolId, type PoolKey } from "./keys.js";
 import { NO_CAP, positionId } from "./ids.js";
-import { resolveDeadline, resolveRecipient, sendRouterWrite, type WriteOptions } from "./write.js";
+import { resolveDeadline, resolveRecipient, sendRouterWrite, type WriteOptions , sendRouterWriteWithPermits } from "./write.js";
 
 export interface MintArgs extends WriteOptions {
   key: PoolKey;
@@ -42,7 +42,7 @@ export interface MintArgs extends WriteOptions {
  */
 export async function mint(c: LogswapClient, a: MintArgs): Promise<Hash> {
   const MAX = (1n << 256n) - 1n;
-  return sendRouterWrite(c, {
+  return sendRouterWriteWithPermits(c, {
     abi: logswapRouterAbi,
     functionName: "mintBlended",
     args: [
@@ -55,7 +55,7 @@ export async function mint(c: LogswapClient, a: MintArgs): Promise<Hash> {
       resolveRecipient(c, a),
       resolveDeadline(a),
     ],
-  });
+  }, [a.key.base, a.key.quote]);
 }
 
 export interface ZapArgs extends WriteOptions {
@@ -78,7 +78,7 @@ export interface ZapArgs extends WriteOptions {
  * paid by the incumbent LPs (`logswap-docs` §*Quote-only capital*). Paying the curve removes it.
  */
 export async function zapIn(c: LogswapClient, a: ZapArgs): Promise<Hash> {
-  return sendRouterWrite(c, {
+  return sendRouterWriteWithPermits(c, {
     abi: logswapRouterAbi,
     functionName: "zapIn",
     args: [
@@ -92,7 +92,7 @@ export async function zapIn(c: LogswapClient, a: ZapArgs): Promise<Hash> {
       resolveRecipient(c, a),
       resolveDeadline(a),
     ],
-  });
+  }, [a.fundWithBase ? a.key.base : a.key.quote]);
 }
 
 export interface UpdateArgs extends WriteOptions {
@@ -110,7 +110,7 @@ export interface UpdateArgs extends WriteOptions {
 /** Resize and reposition in one call — the edit v3 cannot express without destroying the position. */
 export async function update(c: LogswapClient, a: UpdateArgs): Promise<Hash> {
   const MAX = (1n << 256n) - 1n;
-  return sendRouterWrite(c, {
+  return sendRouterWriteWithPermits(c, {
     abi: logswapRouterAbi,
     functionName: "update",
     args: [
@@ -125,7 +125,7 @@ export async function update(c: LogswapClient, a: UpdateArgs): Promise<Hash> {
       resolveRecipient(c, a),
       resolveDeadline(a),
     ],
-  });
+  }, [a.key.base, a.key.quote]);
 }
 
 export interface MoveArgs extends WriteOptions {

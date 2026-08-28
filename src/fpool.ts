@@ -199,12 +199,15 @@ export interface FPoolSwapArgs {
  * remain callable (plain allowance to the manager, settle to caller) but are the primitive's
  * interface, not the SDK's: routing everywhere is what keeps the two pools identical to use.
  */
-function fSwap(c: LogswapClient, a: FPoolSwapArgs, kind: FPoolQuoteKind, k = 0) {
+async function fSwap(c: LogswapClient, a: FPoolSwapArgs, kind: FPoolQuoteKind, k = 0) {
+  const st = await getFPool(c, a.poolId);
+  const pull = kind === FPoolQuoteKind.QuoteIn ? st.quote : st.bases[a.j]!;
   return writeRouter(
     c,
     "swapExactIn",
     [a.poolId, kind, BigInt(a.j), BigInt(k), a.amountIn, a.minOut ?? 0n, a.to ?? a.account, a.deadline ?? defaultDeadline()],
     a.account,
+    [pull],
   );
 }
 
@@ -272,11 +275,13 @@ export async function fPoolZapIn(
   a: { poolId: Hex; dL: bigint; maxQuoteIn: bigint; minShares?: bigint; to?: Address; account: Address; deadline?: bigint },
 ) {
   const to = a.to ?? a.account;
+  const st = await getFPool(c, a.poolId);
   return writeRouter(
     c,
     "zapIn",
     [a.poolId, a.dL, a.maxQuoteIn, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
     a.account,
+    [st.quote],
   );
 }
 
@@ -341,13 +346,32 @@ async function writeFPool(c: LogswapClient, poolId: Hex, functionName: string, a
   return wallet.writeContract(request as never);
 }
 
-async function writeRouter(c: LogswapClient, functionName: string, args: unknown[], account: Address) {
+async function writeRouter(
+  c: LogswapClient,
+  functionName: string,
+  args: unknown[],
+  account: Address,
+  /** Tokens the call pulls: missing Permit2 allowances are SIGNED and ride in the same tx. */
+  pullTokens: Address[] = [],
+) {
   const wallet = requireWallet(c);
+  let fn = functionName;
+  let sendArgs: unknown[] = args;
+  if (pullTokens.length) {
+    const { permit2SigCalls } = await import("./onboard.js");
+    const sigCalls = await permit2SigCalls(c, pullTokens).catch(() => []);
+    if (sigCalls.length) {
+      const { encodeFunctionData } = await import("viem");
+      const inner = encodeFunctionData({ abi: logswapRouterAbi, functionName, args } as never);
+      fn = "multicall";
+      sendArgs = [[...sigCalls, inner]];
+    }
+  }
   const { request } = await c.public.simulateContract({
     address: c.addresses.router,
     abi: logswapRouterAbi,
-    functionName,
-    args,
+    functionName: fn,
+    args: sendArgs,
     account,
   } as never);
   return wallet.writeContract(request as never);

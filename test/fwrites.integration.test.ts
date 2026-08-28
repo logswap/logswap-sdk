@@ -68,7 +68,7 @@ try {
     addresses: { cPoolManager: d.cPoolManager, router: d.router, lens: d.lens, permit2: d.permit2, fPoolManager: d.fPoolManager },
   });
   multi3 = d.multi3PoolId;
-  launch = d.launchPoolIds[2]; // MOON, rung 2 — enough float out to sell back into
+  launch = d.launchPoolIds[d.launchPoolIds.length - 1]; // the LIVE launch (DOGI, rung 2): float out to sell back into
   m3 = await getFPool(c, multi3);
 
   // Fund, then approve BOTH pull paths — they are different and confusing them is a shipped bug:
@@ -179,11 +179,11 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
   it("discovers every deployed F pool from logs, shapes included", async () => {
     const { discoverFPools } = await import("../src/fpool.js");
     const pools = await discoverFPools(c);
-    expect(pools.length).toBeGreaterThanOrEqual(8); // 2 multi + 6 launches in the fixtures
+    expect(pools.length).toBeGreaterThanOrEqual(3); // the basket + 2 launches in the fixtures
     const launches = pools.filter((p) => p.shape === "launch");
     const baskets = pools.filter((p) => p.shape === "basket");
-    expect(launches.length).toBeGreaterThanOrEqual(6);
-    expect(baskets.length).toBeGreaterThanOrEqual(2);
+    expect(launches.length).toBeGreaterThanOrEqual(2);
+    expect(baskets.length).toBeGreaterThanOrEqual(1);
     expect(pools.map((p) => p.poolId)).toContain(multi3);
   });
 

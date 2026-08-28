@@ -113,3 +113,22 @@ export async function simulateRouterWrite<T>(
   } as never);
   return result as T;
 }
+
+/**
+ * A router write that carries its own Permit2 permissions: missing allowances for `pullTokens`
+ * are SIGNED (no gas, no extra transaction) and submitted as `applyPermit2` calls in one
+ * multicall with the action. The 3-transaction mint becomes 1. Falls through to a plain write
+ * when nothing is missing or Permit2 is not wired.
+ */
+export async function sendRouterWriteWithPermits(
+  c: LogswapClient,
+  args: { abi: readonly unknown[]; functionName: string; args: readonly unknown[]; bufferPct?: bigint },
+  pullTokens: Address[],
+): Promise<Hash> {
+  const { permit2SigCalls } = await import("./onboard.js");
+  const sigCalls = await permit2SigCalls(c, pullTokens).catch(() => []);
+  if (sigCalls.length === 0) return sendRouterWrite(c, args);
+  const { encodeFunctionData } = await import("viem");
+  const inner = encodeFunctionData({ abi: args.abi, functionName: args.functionName, args: args.args } as never);
+  return sendRouterWrite(c, { abi: args.abi, functionName: "multicall", args: [[...sigCalls, inner]], bufferPct: args.bufferPct });
+}

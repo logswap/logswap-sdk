@@ -10,7 +10,7 @@ import type { Address, Hash } from "viem";
 import { logswapLensAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 import type { PoolKey } from "./keys.js";
-import { resolveDeadline, resolveRecipient, sendRouterWrite, type WriteOptions } from "./write.js";
+import { resolveDeadline, resolveRecipient, sendRouterWrite, type WriteOptions , sendRouterWriteWithPermits } from "./write.js";
 
 /**
  * Quote an exact-in swap. Exact, not approximate — the lens is a revert-quoter that runs the real
@@ -60,11 +60,11 @@ export interface SwapExactInArgs extends WriteOptions {
 }
 
 export async function swapExactIn(c: LogswapClient, a: SwapExactInArgs): Promise<Hash> {
-  return sendRouterWrite(c, {
+  return sendRouterWriteWithPermits(c, {
     abi: logswapRouterAbi,
     functionName: "swapExactIn",
     args: [a.key, a.baseIn, a.amountIn, a.minOut, resolveRecipient(c, a), resolveDeadline(a)],
-  });
+  }, [a.baseIn ? a.key.base : a.key.quote]);
 }
 
 export interface SwapExactOutArgs extends WriteOptions {
@@ -77,11 +77,11 @@ export interface SwapExactOutArgs extends WriteOptions {
 }
 
 export async function swapExactOut(c: LogswapClient, a: SwapExactOutArgs): Promise<Hash> {
-  return sendRouterWrite(c, {
+  return sendRouterWriteWithPermits(c, {
     abi: logswapRouterAbi,
     functionName: "swapExactOut",
     args: [a.key, a.baseOut, a.amountOut, a.maxIn, resolveRecipient(c, a), resolveDeadline(a)],
-  });
+  }, [a.baseOut ? a.key.quote : a.key.base]);
 }
 
 /** One leg of a route. `baseIn` is that hop's direction through its own market. */

@@ -14,7 +14,7 @@
  * router directly looks correct and does nothing.
  */
 
-import { parseAbi, zeroAddress, type Address, type Hash } from "viem";
+import { parseAbi, zeroAddress, type Address, type Hash, type Hex } from "viem";
 import type { LogswapClient } from "./client.js";
 import { requireWallet } from "./write.js";
 
@@ -160,4 +160,69 @@ export async function checkTokenReadiness(
   }
 
   return { usesPermit2: usesPermit2(c), needsTokenApproval: allowance < need, needsPermit2Approval };
+}
+
+// ─── the signature path: allowances that ride inside the action's own transaction ─────────────
+//
+// The rationalized flow. A token's ONLY unavoidable transaction is its one-time ERC-20 approval
+// to Permit2; the Permit2→router allowance is set by an EIP-712 SIGNATURE (free, instant, no
+// gas) submitted as an `applyPermit2` call INSIDE the same multicall as the action. Minting on a
+// fresh token is then one transaction, not three — the pattern the router's `applyPermit2` +
+// `multicall` were built for, and the one canonical Permit2 UX uses.
+
+const PERMIT2_TYPES = {
+  PermitDetails: [
+    { name: "token", type: "address" },
+    { name: "amount", type: "uint160" },
+    { name: "expiration", type: "uint48" },
+    { name: "nonce", type: "uint48" },
+  ],
+  PermitSingle: [
+    { name: "details", type: "PermitDetails" },
+    { name: "spender", type: "address" },
+    { name: "sigDeadline", type: "uint256" },
+  ],
+} as const;
+
+/**
+ * For each token whose Permit2→router allowance is missing: read the nonce, have the wallet SIGN
+ * a PermitSingle (a signature prompt, not a transaction), and return the encoded `applyPermit2`
+ * calls ready to ride in a router multicall. Tokens already allowed produce nothing.
+ */
+export async function permit2SigCalls(c: LogswapClient, tokens: Address[]): Promise<Hex[]> {
+  if (!usesPermit2(c)) return [];
+  const { account, address: owner } = requireWallet(c);
+  const chainId = await c.public.getChainId();
+  const calls: Hex[] = [];
+  for (const token of [...new Set(tokens.map((t) => t.toLowerCase() as Address))]) {
+    const [amt, , nonce] = (await c.public.readContract({
+      address: c.addresses.permit2!,
+      abi: PERMIT2,
+      functionName: "allowance",
+      args: [owner, token, c.addresses.router],
+    })) as readonly [bigint, number, number];
+    if (amt >= 1n << 120n) continue; // effectively infinite already
+    const message = {
+      details: { token, amount: MAX_UINT160, expiration: Number(MAX_UINT48), nonce },
+      spender: c.addresses.router,
+      sigDeadline: BigInt(Math.floor(Date.now() / 1000)) + 1800n,
+    };
+    const signature = await c.wallet!.signTypedData({
+      account,
+      domain: { name: "Permit2", chainId, verifyingContract: c.addresses.permit2! },
+      types: PERMIT2_TYPES,
+      primaryType: "PermitSingle",
+      message,
+    } as never);
+    const { encodeFunctionData } = await import("viem");
+    const { logswapRouterAbi } = await import("./generated.js");
+    calls.push(
+      encodeFunctionData({
+        abi: logswapRouterAbi,
+        functionName: "applyPermit2",
+        args: [owner, message, signature],
+      } as never),
+    );
+  }
+  return calls;
 }

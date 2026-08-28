@@ -68,7 +68,21 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       return { request: p, result: 0n };
     },
     estimateContractGas: async (p: never) => (check(p), 100_000n),
-    readContract: async (p: never) => (check(p), 0n),
+    readContract: async (p: never) => {
+      check(p);
+      const q = p as unknown as { functionName: string; args?: readonly unknown[]; address?: string };
+      // permit2.allowance returns the packed triple; getFPool's reads return pool-shaped values
+      if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
+      if (q.functionName === "getPool") {
+        return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, leverTheta: 0n,
+          bigSigma: 0n, authority: A(0xa), feesOnly: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n };
+      }
+      if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
+      if (q.functionName === "shareIdOf") return (1n << 255n) | (BigInt(POOL) >> 1n);
+      if (q.functionName === "totalSupply") return 10n ** 21n;
+      return 0n;
+    },
+    getChainId: async () => 31337,
   };
   const wallet = {
     account: { address: A(0xa), type: "json-rpc" },
@@ -78,6 +92,8 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.abi && q.functionName) check(p);
       return HASH;
     },
+    // the signature path: a permit is SIGNED, never sent — the fake returns a well-formed sig
+    signTypedData: async () => ("0x" + "ab".repeat(65)) as `0x${string}`,
   };
   const c = createLogswapClient({
     public: pub as never,
@@ -136,8 +152,12 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolSwapQuoteIn(c, { poolId: POOL, j: 0, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSwapBaseIn(c, { poolId: POOL, j: 1, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSwapBaseForBase(c, { poolId: POOL, j: 0, k: 1, amountIn: 1n, account: A(0xa) })).resolves.toBe(HASH);
-    // each write encodes twice — at simulate and at send — so assert coverage, not multiplicity
-    expect(new Set(encoded)).toEqual(new Set(["swapExactIn"]));
+    // The fake reports NO Permit2 allowance, so each swap takes the one-transaction path:
+    // reads, a SIGNED permit (signTypedData, no tx), and ONE multicall carrying applyPermit2 +
+    // the swap. The write leaving the fake must therefore be multicall, never a bare swap
+    // preceded by approval transactions — that is the rationalized flow, asserted.
+    expect(encoded).toContain("multicall");
+    expect(encoded).not.toContain("approve");
   });
   it("mint / burn", async () => {
     const { c } = fakeClient();
