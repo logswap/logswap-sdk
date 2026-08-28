@@ -10,6 +10,7 @@
 
 import type { Address, Hex } from "viem";
 import type { LogswapClient } from "./client.js";
+import { cPoolManagerAbi } from "./generated.js";
 import { getPositionClass } from "./positions.js";
 import { discoverMarkets, type DiscoveredMarket } from "./pools.js";
 import { poolId, type PoolKey } from "./keys.js";
@@ -181,7 +182,31 @@ export async function discoverMarketsBest(
   if (url) {
     try {
       const markets = await discoverMarketsIndexed(url, signal);
-      if (markets.length) return { markets, source: "indexer" };
+      // The indexer is a CACHE and the chain is the truth. After a redeploy the indexer keeps
+      // serving the previous deployment's markets; calling the new manager with those keys makes
+      // every read revert, refresh-proof (it presented as "phiEff reverted", forever). So verify
+      // each candidate against the manager the client is actually pointed at, and keep only the
+      // markets that exist there; if none survive, the chain scan is the answer.
+      if (markets.length) {
+        const alive = (
+          await Promise.all(
+            markets.map(async (m) => {
+              try {
+                await c.public.readContract({
+                  address: c.addresses.cPoolManager,
+                  abi: cPoolManagerAbi,
+                  functionName: "phiEff",
+                  args: [m.key],
+                } as never);
+                return m;
+              } catch {
+                return null;
+              }
+            }),
+          )
+        ).filter((m): m is DiscoveredMarket => m !== null);
+        if (alive.length) return { markets: alive, source: "indexer" };
+      }
     } catch {
       /* fall through — a missing indexer must not cost you the market list */
     }
