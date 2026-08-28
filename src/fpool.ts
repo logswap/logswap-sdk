@@ -254,9 +254,11 @@ export async function fPoolBurn(
  * and expect change back — do not treat it as exact.
  */
 export async function fPoolPreviewZapIn(c: LogswapClient, poolId: Hex, dL: bigint): Promise<bigint> {
+  // read-only lives on the LENS (the router's F flows moved to a facet; its previews came here)
+  const { logswapLensAbi } = await import("./generated.js");
   return c.public.readContract({
-    address: c.addresses.router,
-    abi: logswapRouterAbi,
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
     functionName: "previewZapIn",
     args: [poolId, dL],
   } as never) as Promise<bigint>;
