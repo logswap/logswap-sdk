@@ -636,3 +636,37 @@ export async function discoverFPools(
     };
   });
 }
+
+
+/**
+ * Every holder of a pool's shares, from the ERC-6909 Transfer stream — the id is an indexed
+ * topic, so one filtered log query aggregates the whole ledger. The 0xdead entry is the
+ * MIN_SHARES lock from seeding; callers usually label rather than hide it.
+ */
+export async function fPoolShareHolders(
+  c: LogswapClient,
+  poolIdHex: Hex,
+  opts: { fromBlock?: bigint } = {},
+): Promise<Array<{ holder: Address; shares: bigint }>> {
+  type Ev = Extract<(typeof fPoolManagerAbi)[number], { type: "event"; name: "Transfer" }>;
+  const ev = fPoolManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Transfer");
+  if (!ev) throw new Error("logswap: 6909 Transfer event missing from the generated ABI");
+  const id = fPoolShareId(poolIdHex);
+  const logs = await c.public.getLogs({
+    address: c.addresses.fPoolManager!,
+    event: ev,
+    args: { id },
+    fromBlock: opts.fromBlock ?? 0n,
+    toBlock: "latest",
+  });
+  const bal = new Map<string, bigint>();
+  for (const l of logs) {
+    const a = l.args as { from: Address; to: Address; amount: bigint };
+    if (a.from !== "0x0000000000000000000000000000000000000000") bal.set(a.from, (bal.get(a.from) ?? 0n) - a.amount);
+    if (a.to !== "0x0000000000000000000000000000000000000000") bal.set(a.to, (bal.get(a.to) ?? 0n) + a.amount);
+  }
+  return [...bal.entries()]
+    .filter(([, v]) => v > 0n)
+    .map(([holder, shares]) => ({ holder: holder as Address, shares }))
+    .sort((a, b) => (b.shares > a.shares ? 1 : -1));
+}

@@ -14,6 +14,7 @@ import { cPoolManagerAbi } from "./generated.js";
 import { getPositionClass } from "./positions.js";
 import { discoverMarkets, type DiscoveredMarket } from "./pools.js";
 import { poolId, type PoolKey } from "./keys.js";
+import { NO_CAP } from "./ids.js";
 
 export interface IndexerError {
   message: string;
@@ -212,4 +213,40 @@ export async function discoverMarketsBest(
     }
   }
   return { markets: await discoverMarkets(c), source: "chain" };
+}
+
+/**
+ * The UNCAPPED position classes of a pool, from the CHAIN alone: the lens enumerates live floors
+ * (one bitmap bit each), and an uncapped id is a pure function of (key, floor). No indexer.
+ * Capped classes need `IdRegistered` replay and are absent here — callers that also want those
+ * use the indexed `poolPositions` and fall back to this when the indexer is missing or stale.
+ */
+export async function poolPositionsFromChain(c: LogswapClient, key: PoolKey, x: bigint): Promise<PoolPosition[]> {
+  const { logswapLensAbi } = await import("./generated.js");
+  const floors = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "liveTicks",
+    args: [key],
+  } as never)) as readonly bigint[];
+  const pool = poolId(key);
+  const rows = await Promise.all(
+    [...floors].map(async (floor) => {
+      const id = (await c.public.readContract({
+        address: c.addresses.cPoolManager,
+        abi: cPoolManagerAbi,
+        functionName: "idOf",
+        args: [key, floor],
+      } as never)) as bigint;
+      const [L, shares] = (await c.public.readContract({
+        address: c.addresses.cPoolManager,
+        abi: cPoolManagerAbi,
+        functionName: "positions",
+        args: [id],
+      } as never)) as readonly [bigint, bigint, bigint, bigint];
+      if (L === 0n) return null;
+      return { id, poolId: pool, floor, cap: NO_CAP, capped: false, L, shares, active: x >= floor } as PoolPosition;
+    }),
+  );
+  return rows.filter((r): r is PoolPosition => r !== null);
 }
