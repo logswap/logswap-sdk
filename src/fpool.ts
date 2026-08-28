@@ -621,7 +621,16 @@ export interface DiscoveredFPool {
   phi: bigint;
   feesOnly: boolean;
   authority: Address;
-  /** n = 1 is the launch shape; n > 1 the basket. A UI may refine, this is the structural read. */
+  /** Whether `seed` has run; an unseeded pool has no floor and no float, so nothing to show. */
+  seeded: boolean;
+  /** The quote the pool was born with. Zero is the launchpad's signature (launchpad.md §3). */
+  q0: bigint;
+  /**
+   * The PRODUCT the pool is, by the spec's definition rather than a guess: a LAUNCH is one asset
+   * born at Q = 0 — a resting ask under a token, nothing raised, the creator alone on the lever;
+   * everything else is a liquidity BASKET (public, quote-funded). Read from the Seeded log, so a
+   * one-asset pool seeded WITH quote files correctly as liquidity, not as a pad.
+   */
   shape: FPoolShape;
 }
 
@@ -637,17 +646,30 @@ export async function discoverFPools(
   type Ev = Extract<(typeof fPoolManagerAbi)[number], { type: "event"; name: "Initialize" }>;
   const ev = fPoolManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Initialize");
   if (!ev) throw new Error("logswap: F Initialize event missing from the generated ABI");
-  const logs = await c.public.getLogs({
-    address: c.addresses.fPoolManager!,
-    event: ev,
-    fromBlock: opts.fromBlock ?? 0n,
-    toBlock: opts.toBlock ?? "latest",
-  });
+  type SeedEv = Extract<(typeof fPoolManagerAbi)[number], { type: "event"; name: "Seeded" }>;
+  const seedEv = fPoolManagerAbi.find((x): x is SeedEv => x.type === "event" && x.name === "Seeded");
+  const [logs, seeds] = await Promise.all([
+    c.public.getLogs({
+      address: c.addresses.fPoolManager!,
+      event: ev,
+      fromBlock: opts.fromBlock ?? 0n,
+      toBlock: opts.toBlock ?? "latest",
+    }),
+    seedEv
+      ? c.public.getLogs({ address: c.addresses.fPoolManager!, event: seedEv, fromBlock: opts.fromBlock ?? 0n, toBlock: opts.toBlock ?? "latest" })
+      : Promise.resolve([]),
+  ]);
+  const q0Of = new Map<string, bigint>();
+  for (const l of seeds) {
+    const a = l.args as { poolId: Hex; Q0: bigint };
+    q0Of.set(a.poolId.toLowerCase(), a.Q0);
+  }
   return logs.map((l) => {
     const a = l.args as {
       poolId: Hex; quote: Address; authority: Address; bases: readonly Address[];
       weights: readonly bigint[]; phi: bigint; feesOnly: boolean;
     };
+    const q0 = q0Of.get(a.poolId.toLowerCase());
     return {
       poolId: a.poolId,
       quote: a.quote,
@@ -656,7 +678,9 @@ export async function discoverFPools(
       phi: a.phi,
       feesOnly: a.feesOnly,
       authority: a.authority,
-      shape: a.bases.length === 1 ? "launch" : "basket",
+      seeded: q0 !== undefined,
+      q0: q0 ?? 0n,
+      shape: a.bases.length === 1 && (q0 ?? 0n) === 0n ? "launch" : "basket",
     };
   });
 }
