@@ -25,6 +25,19 @@ wrong is silent:
 
 Both are computed **offline** — no RPC, no deployment needed to address a market or a position.
 
+## Reading a holder's book
+
+- `positionsOf(c, key, owner)` — the **uncapped** book in one lens call (the ladder bitmap
+  enumerates floors; an uncapped id is a pure function of the floor).
+- `holdingsOf(c, key, owner)` — the **complete** book, capped classes included: replays
+  `IdRegistered` (every class is registered once, with its floor and cap) and checks the owner's
+  balance on each. Use this for "my positions"; a capped mint is invisible to `positionsOf`.
+- `getHolderPosition(c, key, owner, floor, cap?)` — one class by (floor, cap); `move(...)` /
+  `update(...)` / `harvest(...)` / `burn(...)` / `claimFees(...)` act on it.
+- F side: `discoverFPools(c)` (shape, and the `block` the pool was initialized in), `getFPool`,
+  `fPoolShareBalance`, `fPoolShareValue`; `previewZapIn` reads the **lens** (the router's F flows
+  live in a facet, its previews moved to the lens).
+
 ## The derivation gate
 
 Both derivations are **tier-1 frozen** (`docs/app.md`): `poolId` is the primary key of the entire
