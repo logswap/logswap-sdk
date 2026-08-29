@@ -6,6 +6,7 @@
  * accounts holding the same class can have different claimable amounts.
  */
 
+import { parseAbiItem } from "viem";
 import type { Address } from "viem";
 import { logswapLensAbi, cPoolManagerAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
@@ -191,6 +192,9 @@ export function positionQuote(
 export interface HeldPositionRow {
   id: bigint;
   floor: bigint;
+  /** NO_CAP for an uncapped class. */
+  cap: bigint;
+  capped: boolean;
   shares: bigint;
   /** The holder's slice of the class's exposure. */
   L: bigint;
@@ -205,5 +209,36 @@ export async function positionsOf(c: LogswapClient, key: PoolKey, owner: Address
     functionName: "positionsOf",
     args: [key, owner],
   } as never)) as readonly { id: bigint; floor: bigint; shares: bigint; L: bigint; fees: bigint }[];
-  return rows.map((r) => ({ id: r.id, floor: r.floor, shares: r.shares, L: r.L, fees: r.fees }));
+  return rows.map((r) => ({ id: r.id, floor: r.floor, cap: NO_CAP, capped: false, shares: r.shares, L: r.L, fees: r.fees }));
+}
+
+const ID_REGISTERED = parseAbiItem("event IdRegistered(uint256 indexed id, bytes32 indexed poolId, int256 floor, int256 cap, bool capped)");
+
+/**
+ * EVERY class this owner holds in a pool, capped ones included — the complete book.
+ *
+ * `positionsOf` (the lens) enumerates the uncapped book from the ladder bitmap in one call and
+ * cannot list capped classes: a capped id is a (floor, cap) pair, quadratic in live ticks. This
+ * replays `IdRegistered` — every class is registered once, on first mint, with its floor and
+ * cap — then checks the owner's ERC-6909 balance on each and reads the class for its L, so the
+ * holder's slice is L · shares_owner / shares_class, and fees from the lens. One log query plus
+ * a read per registered class; fine for a pool's lifetime of classes.
+ */
+export async function holdingsOf(c: LogswapClient, key: PoolKey, owner: Address, fromBlock: bigint = 0n): Promise<HeldPositionRow[]> {
+  const pool = poolId(key);
+  const logs = await c.public.getLogs({ address: c.addresses.cPoolManager, event: ID_REGISTERED, args: { poolId: pool }, fromBlock, toBlock: "latest" });
+  const { logswapLensAbi } = await import("./generated.js");
+  const rows = await Promise.all(
+    logs.map(async (l) => {
+      const a = l.args as { id?: bigint; floor?: bigint; cap?: bigint; capped?: boolean };
+      const id = a.id ?? 0n;
+      const bal = (await c.public.readContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "balanceOf", args: [owner, id] } as never)) as bigint;
+      if (bal === 0n) return null;
+      const [L, shares] = (await c.public.readContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "positions", args: [id] } as never)) as readonly [bigint, bigint, bigint, bigint];
+      const fees = (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "feesOfById", args: [id, owner] } as never).catch(() => 0n)) as bigint;
+      const mine = shares > 0n ? (L * bal) / shares : 0n;
+      return { id, floor: a.floor ?? 0n, cap: a.capped ? (a.cap ?? NO_CAP) : NO_CAP, capped: !!a.capped, shares: bal, L: mine, fees } as HeldPositionRow;
+    }),
+  );
+  return rows.filter((r): r is HeldPositionRow => r !== null);
 }
