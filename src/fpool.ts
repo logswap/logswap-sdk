@@ -623,6 +623,8 @@ export interface DiscoveredFPool {
   phi: bigint;
   feesOnly: boolean;
   authority: Address;
+  /** The block the pool was initialized in — its age, for annualising realized income. */
+  block: bigint;
   /** Whether `seed` has run; an unseeded pool has no floor and no float, so nothing to show. */
   seeded: boolean;
   /** The quote the pool was born with. Zero is the launchpad's signature (launchpad.md §3). */
@@ -680,6 +682,7 @@ export async function discoverFPools(
       phi: a.phi,
       feesOnly: a.feesOnly,
       authority: a.authority,
+      block: l.blockNumber ?? 0n,
       seeded: q0 !== undefined,
       q0: q0 ?? 0n,
       shape: a.bases.length === 1 && (q0 ?? 0n) === 0n ? "launch" : "basket",
