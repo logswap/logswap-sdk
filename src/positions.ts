@@ -183,6 +183,30 @@ export function positionQuote(
   return (p.L * (upper - p.floor)) / 10n ** 18n;
 }
 
+/** The manager's `MINT_FEE`: 2 bp of newly-earning L, as a WAD fraction. */
+export const MINT_FEE = 2n * 10n ** 14n;
+
+/**
+ * The one-time mint fee at log-price `x`, in quote units — the amount `_mintCore` pulls ON TOP of
+ * the position's own legs, so a mint's total quote pull is `positionQuote(p, x) + mintFee(p, x)`.
+ *
+ * Mirrors the manager's exemption cases: a DORMANT mint pays nothing — floor above spot, or a
+ * capped class spot has already passed (`cap <= x`). Anything earning pays `MINT_FEE · L`, half
+ * accrued through `F` to the LPs already earning, half to the protocol. This is NOT the swap fee:
+ * that one is charged per unit of |Δ log p| on swaps; this is a flat charge on L, once, at mint.
+ *
+ * One rung of imprecision: for a floor or cap exactly AT spot the contract consults its `currentK`
+ * pointer (an up-move counts the tick, a down-move does not), which this offline mirror cannot see.
+ * Preview with it; let the chain be authoritative on that boundary.
+ */
+export function mintFee(
+  p: { L: bigint; floor: bigint; cap: bigint; capped: boolean },
+  x: bigint,
+): bigint {
+  if (p.floor > x || (p.capped && p.cap <= x)) return 0n;
+  return (p.L * MINT_FEE) / 10n ** 18n;
+}
+
 /**
  * Every UNCAPPED position `owner` holds in a market, enumerated fully on-chain by the lens — a
  * bitmap walk plus a balance check per live floor. No indexer, no log scan. Capped classes are

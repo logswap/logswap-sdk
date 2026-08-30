@@ -1,4 +1,4 @@
-import { positionQuote } from "../src/positions.js";
+import { mintFee, positionQuote } from "../src/positions.js";
 import { bytea } from "../src/indexer.js";
 import { annualise, edgeQuote, feesQuote, floorDistance, floorDrawdown, floorDrawdownPrice, floorPrice, lpEdge } from "../src/pools.js";
 /**
@@ -186,5 +186,33 @@ describe("position quote leg", () => {
   it("an uncapped position keeps converting with no ceiling", () => {
     const p = { L, floor: 0n, cap: 0n, capped: false };
     expect(positionQuote(p, WAD / 2n)).toBe(500_000n * WAD);
+  });
+});
+
+describe("mint fee", () => {
+  const WAD = 10n ** 18n;
+  const L = 100_000n * WAD;
+
+  it("charges 2 bp of L on an earning mint", () => {
+    // the devnet case: L = 100,000, floor 0.03 below spot -> 20 quote units
+    expect(mintFee({ L, floor: -3n * (WAD / 100n), cap: 0n, capped: false }, 0n)).toBe(20n * WAD);
+  });
+
+  it("exempts a dormant mint — floor above spot", () => {
+    expect(mintFee({ L, floor: WAD / 10n, cap: 0n, capped: false }, 0n)).toBe(0n);
+  });
+
+  it("exempts a capped-out mint — spot at or past the cap", () => {
+    const p = { L, floor: -2n * (WAD / 10n), cap: -1n * (WAD / 10n), capped: true };
+    expect(mintFee(p, 0n)).toBe(0n);
+    expect(mintFee(p, p.cap)).toBe(0n);
+    // in range it pays like any earning mint
+    expect(mintFee(p, -15n * (WAD / 100n))).toBe(20n * WAD);
+  });
+
+  it("total quote pull is the leg plus the fee", () => {
+    const p = { L, floor: -3n * (WAD / 100n), cap: 0n, capped: false };
+    // 3,000 + 20 = 3,020 — the exact dQuote observed on-chain for this mint
+    expect(positionQuote(p, 0n) + mintFee(p, 0n)).toBe(3_020n * WAD);
   });
 });
