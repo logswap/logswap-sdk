@@ -723,3 +723,15 @@ export async function fPoolShareHolders(
     .map(([holder, shares]) => ({ holder: holder as Address, shares }))
     .sort((a, b) => (b.shares > a.shares ? 1 : -1));
 }
+
+/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, feesOnly, seeded, dissolved, n, Q, L, shares, theta0, bigSigma, leverTheta). */
+export async function getFPoolsRaw(c: LogswapClient, poolIds: Hex[]): Promise<readonly unknown[]> {
+  const { logswapLensAbi } = await import("./generated.js");
+  return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "getFPools", args: [poolIds] } as never)) as readonly unknown[];
+}
+
+/** Share value from the lens — (L + Q)/shares, WAD per share — the same figure as `fPoolShareValue`, from one source. */
+export async function shareValueOnChain(c: LogswapClient, poolId: Hex): Promise<bigint> {
+  const { logswapLensAbi } = await import("./generated.js");
+  return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "shareValue", args: [poolId] } as never)) as bigint;
+}

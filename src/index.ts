@@ -19,3 +19,4 @@ export * from "./indexer.js";
 export * from "./tokencache.js";
 export * from "./fpool.js";
 export { cPoolManagerAbi, fPoolManagerAbi, logswapLensAbi, logswapRouterAbi } from "./generated.js";
+export * from "./admin.js";

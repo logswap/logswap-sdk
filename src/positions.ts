@@ -227,18 +227,26 @@ const ID_REGISTERED = parseAbiItem("event IdRegistered(uint256 indexed id, bytes
 export async function holdingsOf(c: LogswapClient, key: PoolKey, owner: Address, fromBlock: bigint = 0n): Promise<HeldPositionRow[]> {
   const pool = poolId(key);
   const logs = await c.public.getLogs({ address: c.addresses.cPoolManager, event: ID_REGISTERED, args: { poolId: pool }, fromBlock, toBlock: "latest" });
-  const { logswapLensAbi } = await import("./generated.js");
-  const rows = await Promise.all(
-    logs.map(async (l) => {
-      const a = l.args as { id?: bigint; floor?: bigint; cap?: bigint; capped?: boolean };
-      const id = a.id ?? 0n;
-      const bal = (await c.public.readContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "balanceOf", args: [owner, id] } as never)) as bigint;
-      if (bal === 0n) return null;
-      const [L, shares] = (await c.public.readContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "positions", args: [id] } as never)) as readonly [bigint, bigint, bigint, bigint];
-      const fees = (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "feesOfById", args: [id, owner] } as never).catch(() => 0n)) as bigint;
-      const mine = shares > 0n ? (L * bal) / shares : 0n;
-      return { id, floor: a.floor ?? 0n, cap: a.capped ? (a.cap ?? NO_CAP) : NO_CAP, capped: !!a.capped, shares: bal, L: mine, fees } as HeldPositionRow;
-    }),
-  );
-  return rows.filter((r): r is HeldPositionRow => r !== null);
+  const ids = logs.map((l) => (l.args as { id?: bigint }).id ?? 0n).filter((id) => id !== 0n);
+  if (ids.length === 0) return [];
+  // one lens call: balance, class L, fees, floor and cap for every id the owner holds
+  const rows = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "heldByIds",
+    args: [key, owner, ids],
+  } as never)) as readonly { id: bigint; floor: bigint; cap: bigint; capped: boolean; shares: bigint; L: bigint; fees: bigint }[];
+  return rows.map((r) => ({ id: r.id, floor: r.floor, cap: r.capped ? r.cap : NO_CAP, capped: r.capped, shares: r.shares, L: r.L, fees: r.fees }));
+}
+
+/** A holding's legs, exact from the lens: base (base units), the quote leg, claimable fees, and
+ *  value = base·p + quote + fees in quote units — L + quote + fees for an uncapped active class. */
+export async function legsOf(c: LogswapClient, key: PoolKey, id: bigint, holder: Address): Promise<{ base: bigint; quote: bigint; fees: bigint; value: bigint }> {
+  const [base, quote, fees, value] = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "legsOf",
+    args: [key, id, holder],
+  } as never)) as readonly [bigint, bigint, bigint, bigint];
+  return { base, quote, fees, value };
 }
