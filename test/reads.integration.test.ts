@@ -115,8 +115,13 @@ describe.skipIf(!live)("reads against the local deployment", () => {
   it("resolves a holder position with an id computed OFFLINE", async () => {
     const markets = await discoverMarkets(c);
     const m = markets.find((x) => x.poolId === deployment.poolId)!;
+    // an UNCAPPED class the deployer holds: the lowest live tick may belong to a capped class
+    // alone (the fixture's capped-out class sits lowest), and an offline id is uncapped by shape
+    const held = await positionsOf(c, m.key, deployment.deployer as Address);
+    expect(held.length).toBeGreaterThan(0);
+    const floor = held[0]!.floor; // already log-price WAD; do NOT multiply by tickSpacing
     const floors = await liveFloors(c, m.key);
-    const floor = floors[0]!; // already log-price WAD; do NOT multiply by tickSpacing
+    expect(floors).toContain(floor);
 
     const p = await getHolderPosition(c, m.key, deployment.deployer as Address, floor);
     expect(p.floor).toBe(floor);
