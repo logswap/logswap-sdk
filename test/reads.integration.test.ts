@@ -15,7 +15,7 @@ import { foundry } from "viem/chains";
 import { readFileSync } from "node:fs";
 import { createLogswapClient, assertVersion, type LogswapClient } from "../src/client.js";
 import { discoverMarkets, getPool, isValidFloor, liveFloors, lpEdge, phiEff, priceOf } from "../src/pools.js";
-import { balanceOf, describeId, getHolderPosition, partitionIds } from "../src/positions.js";
+import { balanceOf, describeId, getHolderPosition, partitionIds, positionsOf } from "../src/positions.js";
 import { claimId, isPosition, NO_CAP } from "../src/ids.js";
 import { poolId, type PoolKey } from "../src/keys.js";
 
