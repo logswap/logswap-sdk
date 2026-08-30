@@ -20,7 +20,8 @@ import { describe, expect, it } from "vitest";
 import { encodeFunctionData, toFunctionSelector, type Address, type Hex } from "viem";
 import { foundry } from "viem/chains";
 import { createLogswapClient, type LogswapClient } from "../src/client.js";
-import { mint, zapIn, update, move, harvest, burn } from "../src/liquidity.js";
+import { mint, zapIn, update, move, harvest, deepen, floor, cap, shift, resize, exit, reprice, edit, burn } from "../src/liquidity.js";
+import { execute, mintAction, swapExactInAction, settleInKind, OPEN_DELTA } from "../src/actions.js";
 import { swapExactIn, swapExactOut, swapExactInPath } from "../src/swap.js";
 import { claimFees, approveRouterAsOperator } from "../src/claims.js";
 import { approveToken, approvePermit2ForRouter } from "../src/onboard.js";
@@ -36,7 +37,7 @@ import {
   fPoolMint,
   fPoolBurn,
   fPoolHarvest,
-  fPoolRefill,
+  fPoolDeepen,
   fPoolZapIn,
   fPoolZapOut,
   fPoolQuoteSwap,
@@ -79,6 +80,10 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
       if (q.functionName === "shareIdOf") return (1n << 255n) | (BigInt(POOL) >> 1n);
+      // the edit tree reads the class (lens.unpack + positions) and previews (lens.previewUpdate)
+      if (q.functionName === "unpack") return [POOL, -5n, 10n, true];
+      if (q.functionName === "positions") return [10n ** 21n, 10n ** 21n, 0n, 0n];
+      if (q.functionName === "previewUpdate") return [0n, -(10n ** 18n), 3n];
       if (q.functionName === "totalSupply") return 10n ** 21n;
       return 0n;
     },
@@ -116,10 +121,38 @@ describe("every C write helper encodes against the generated ABI", () => {
     const { c } = fakeClient();
     await expect(update(c, { key: KEY, fromId: 1n, shares: 1n, toFloor: 0n, newL: 10n ** 18n })).resolves.toBe(HASH);
   });
-  it("move, and harvest through it", async () => {
+  it("move", async () => {
     const { c } = fakeClient();
     await expect(move(c, { key: KEY, fromId: 1n, shares: 1n, toFloor: 0n })).resolves.toBe(HASH);
-    await expect(harvest(c, { key: KEY, fromFloor: -6n * 10n ** 17n, toFloor: -5n * 10n ** 17n, shares: 1n })).resolves.toBe(HASH);
+  });
+  it("the edit tree: floor / harvest / deepen / cap / shift / resize / exit / reprice → execute", async () => {
+    const { c, encoded } = fakeClient();
+    const base = { key: KEY, fromId: 1n, shares: 1n };
+    await expect(floor(c, { ...base, rungs: 2n })).resolves.toBe(HASH);
+    await expect(harvest(c, base)).resolves.toBe(HASH);
+    await expect(deepen(c, { ...base, rungs: 3n })).resolves.toBe(HASH);
+    await expect(cap(c, { ...base, rungs: -1n })).resolves.toBe(HASH);
+    await expect(shift(c, { ...base, rungs: -2n })).resolves.toBe(HASH);
+    await expect(resize(c, { ...base, newL: 5n })).resolves.toBe(HASH);
+    await expect(exit(c, base)).resolves.toBe(HASH);
+    await expect(reprice(c, { ...base, toFloor: 10n ** 18n })).resolves.toBe(HASH);
+    // a batch rides inside the Permit2 multicall when allowances are missing (the fake says they are)
+    expect(encoded.filter((f) => f === "execute" || f === "multicall").length).toBeGreaterThanOrEqual(8);
+    await expect(harvest(c, { ...base, rungs: -1n })).rejects.toThrow(/deepen/);
+    await expect(deepen(c, { ...base, rungs: 0n })).rejects.toThrow(/harvest/);
+  });
+  it("an edit settled in ONE token appends the netting swap", async () => {
+    const { c, encoded } = fakeClient();
+    // the fake preview releases quote (dQuote < 0): settling in base sells it with an exact-in
+    await expect(edit(c, { key: KEY, fromId: 1n, shares: 1n, toFloor: 0n, newL: 1n, settleIn: "base" })).resolves.toBe(HASH);
+    await expect(edit(c, { key: KEY, fromId: 1n, shares: 1n, toFloor: 0n, newL: 1n, settleIn: "quote" })).resolves.toBe(HASH);
+    // two sends, each encoded twice (the gas estimate, then the write)
+    expect(encoded.filter((f) => f === "execute" || f === "multicall").length).toBe(4);
+  });
+  it("execute, raw", async () => {
+    const { c } = fakeClient();
+    const actions = [mintAction({ key: KEY, targetFloor: 0n, L: 1n }), swapExactInAction({ key: KEY, baseIn: false, amountIn: OPEN_DELTA })];
+    await expect(execute(c, { actions, settle: settleInKind(KEY, A(0xa)) })).resolves.toBe(HASH);
   });
   it("burn", async () => {
     const { c } = fakeClient();
@@ -164,10 +197,10 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolMint(c, { poolId: POOL, dL: 10n ** 18n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolBurn(c, { poolId: POOL, shares: 1n, account: A(0xa) })).resolves.toBe(HASH);
   });
-  it("the floor lever: harvest / refill", async () => {
+  it("the floor lever: harvest / deepen", async () => {
     const { c } = fakeClient();
     await expect(fPoolHarvest(c, { poolId: POOL, amount: 1n, account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolRefill(c, { poolId: POOL, amount: 1n, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolDeepen(c, { poolId: POOL, amount: 1n, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("zaps resolve the ROUTER's overloaded zapIn to the F arity", async () => {
     const { c } = fakeClient();

@@ -317,9 +317,9 @@ export async function fPoolHarvest(c: LogswapClient, a: { poolId: Hex; amount: b
   return writeFPool(c, a.poolId, "harvest", [a.amount, a.to ?? a.account], a.account);
 }
 
-/** Commit quote, deepening θ. The mark does not move — governance may write θ, never x. */
-export async function fPoolRefill(c: LogswapClient, a: { poolId: Hex; amount: bigint; account: Address }) {
-  return writeFPool(c, a.poolId, "refill", [a.amount], a.account);
+/** Commit quote, deepening θ — the other sign of `harvest`, the same word as the C floor edit (decisions 011). The mark does not move: governance may write θ, never x. */
+export async function fPoolDeepen(c: LogswapClient, a: { poolId: Hex; amount: bigint; account: Address }) {
+  return writeFPool(c, a.poolId, "deepen", [a.amount], a.account);
 }
 
 // ─── internals ────────────────────────────────────────────────────────────────
