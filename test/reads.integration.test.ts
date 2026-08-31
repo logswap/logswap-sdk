@@ -14,7 +14,7 @@ import { createPublicClient, http, type Address } from "viem";
 import { foundry } from "viem/chains";
 import { readFileSync } from "node:fs";
 import { createLogswapClient, assertVersion, type LogswapClient } from "../src/client.js";
-import { discoverMarkets, getPool, isValidFloor, liveFloors, lpEdge, phiEff, priceOf } from "../src/pools.js";
+import { discoverMarkets, getPool, isValidFloor, liveFloors, lpEdge, phiEff, priceOf, priceScale } from "../src/pools.js";
 import { balanceOf, describeId, getHolderPosition, partitionIds, positionsOf } from "../src/positions.js";
 import { claimId, isPosition, NO_CAP } from "../src/ids.js";
 import { poolId, type PoolKey } from "../src/keys.js";
@@ -95,8 +95,16 @@ describe.skipIf(!live)("reads against the local deployment", () => {
     expect(s.initialized).toBe(true);
     expect(s.backstopSeeded).toBe(true);
     expect(s.lActive).toBeGreaterThan(0n);
-    expect(priceOf(s)).toBeGreaterThan(1000); // seeded at p = 3000
-    expect(priceOf(s)).toBeLessThan(10000);
+    // the HUMAN mark needs the decimals factor, read from the tokens themselves — the test is
+    // fixture-agnostic (18/18 or the 6-dec USDC devnet alike)
+    const { erc20Abi } = await import("viem");
+    const [bd, qd] = await Promise.all([
+      c.public.readContract({ address: m.key.base, abi: erc20Abi, functionName: "decimals" }).then(Number).catch(() => 18),
+      c.public.readContract({ address: m.key.quote, abi: erc20Abi, functionName: "decimals" }).then(Number).catch(() => 18),
+    ]);
+    const scale = priceScale(bd, qd);
+    expect(priceOf(s, scale)).toBeGreaterThan(1000); // seeded at p = 3000
+    expect(priceOf(s, scale)).toBeLessThan(10000);
 
     // F - Sigma/2 is signed and defined even on a barely-traded pool
     expect(typeof lpEdge(s)).toBe("bigint");
