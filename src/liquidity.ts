@@ -206,14 +206,34 @@ export interface MoveArgs extends WriteOptions {
   shares: bigint;
   toFloor: bigint;
   toCap?: bigint;
+  maxBaseIn?: bigint;
+  maxQuoteIn?: bigint;
 }
 
-/** Reposition at constant exposure — the L-pinned parent of `floor`, `cap` and `shift`; in kind. */
+/**
+ * Reposition at constant exposure — the L-pinned parent of `floor`, `cap` and `shift`; in kind.
+ *
+ * **Bound it.** The router used to settle this entry with no limit, which meant a reposition that
+ * priced differently by inclusion time could pull the whole allowance (security-review2 M-01).
+ * The defaults below are unbounded for callers who genuinely want that; pass `maxBaseIn` /
+ * `maxQuoteIn` from a preview for anything user-facing.
+ */
 export async function move(c: LogswapClient, a: MoveArgs): Promise<Hash> {
+  const MAX = (1n << 256n) - 1n;
   return sendRouterWrite(c, {
     abi: logswapRouterAbi,
     functionName: "move",
-    args: [a.key, a.fromId, a.shares, a.toFloor, a.toCap ?? NO_CAP, resolveDeadline(a)],
+    args: [
+      a.key,
+      a.fromId,
+      a.shares,
+      a.toFloor,
+      a.toCap ?? NO_CAP,
+      a.maxBaseIn ?? MAX,
+      a.maxQuoteIn ?? MAX,
+      resolveRecipient(c, a),
+      resolveDeadline(a),
+    ],
   });
 }
 
