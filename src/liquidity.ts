@@ -90,6 +90,44 @@ export async function mint(c: LogswapClient, a: MintArgs): Promise<Hash> {
   }, [a.key.base, a.key.quote]);
 }
 
+export interface CreateMarketArgs extends WriteOptions {
+  key: PoolKey;
+  /** Launch log-price. Bounded by the manager to ±46 (the price domain, decisions 012). */
+  x0: bigint;
+  /** The backstop's floor — the first mint's rung, permanent for the pool's life. */
+  targetFloor: bigint;
+  /** The founding exposure; must exceed the manager's `minBackstopL` lock. */
+  L: bigint;
+  maxBaseIn?: bigint;
+  maxQuoteIn?: bigint;
+}
+
+/**
+ * Create a market ATOMICALLY: `initialize` at `x0` plus the backstop-establishing first mint in
+ * one transaction — the canonical creation path (decisions 013, security-review H-02). The
+ * two-step path let an attacker seat the PERMANENT backstop at a hostile rung between an honest
+ * `initialize` and its first mint; here either both land or neither, and a front-run of the whole
+ * call reverts it without moving a wei. No cap: the first mint IS the backstop and must be
+ * uncapped.
+ */
+export async function createMarket(c: LogswapClient, a: CreateMarketArgs): Promise<Hash> {
+  const MAX = (1n << 256n) - 1n;
+  return sendRouterWriteWithPermits(c, {
+    abi: logswapRouterAbi,
+    functionName: "createMarket",
+    args: [
+      a.key,
+      a.x0,
+      a.targetFloor,
+      a.L,
+      a.maxBaseIn ?? MAX,
+      a.maxQuoteIn ?? MAX,
+      resolveRecipient(c, a),
+      resolveDeadline(a),
+    ],
+  }, [a.key.base, a.key.quote]);
+}
+
 export interface ZapArgs extends WriteOptions {
   key: PoolKey;
   /** Fund entirely from base (true) or entirely from quote (false). */
