@@ -64,8 +64,18 @@ export async function phiEff(c: LogswapClient, key: PoolKey): Promise<bigint> {
  * Price from the stored log-price. **Lossy** — `x` is exact and this is a float, so use it for
  * display and never for arithmetic you intend to send back on-chain.
  */
-export function priceOf(state: Pick<PoolState, "x">): number {
-  return Math.exp(Number(state.x) / 1e18);
+export function priceOf(state: Pick<PoolState, "x">, scale = 1): number {
+  return Math.exp(Number(state.x) / 1e18) * scale;
+}
+
+/**
+ * The factor between the chain's price and the human one. The chain's log-price is of the WEI
+ * ratio, so with a 6-dec USDC quote and an 18-dec base the human price is `e^x · 10^12`. Pass
+ * this as `scale` to {@link priceOf}, {@link floorPrice} and `fPoolPriceOf` — with 18/18 tokens
+ * it is 1 and nothing changes.
+ */
+export function priceScale(baseDecimals: number, quoteDecimals: number): number {
+  return 10 ** (baseDecimals - quoteDecimals);
 }
 
 /**
@@ -321,8 +331,8 @@ export function edgeQuote(state: Pick<PoolState, "F" | "bigSigma" | "lActive">):
 }
 
 /** The pool floor as a price. **Lossy** — display only, like {@link priceOf}. */
-export function floorPrice(state: Pick<PoolState, "backstopFloor">): number {
-  return Math.exp(Number(state.backstopFloor) / 1e18);
+export function floorPrice(state: Pick<PoolState, "backstopFloor">, scale = 1): number {
+  return Math.exp(Number(state.backstopFloor) / 1e18) * scale;
 }
 
 /** $\log(p / p_{\text{floor}}) = x - \xi$ — how far spot sits above the floor, in log units (WAD). */

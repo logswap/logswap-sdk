@@ -167,8 +167,8 @@ export async function describeFPool(c: LogswapClient, s: FPoolState): Promise<FP
 }
 
 /** `p_j = e^{x_j}`, lossy the way any float conversion is. Compare in log space when it matters. */
-export function fPoolPriceOf(x: bigint): number {
-  return Math.exp(Number(x) / 1e18);
+export function fPoolPriceOf(x: bigint, scale = 1): number {
+  return Math.exp(Number(x) / 1e18) * scale;
 }
 
 /** Value per share at the pool's own marks. `V = L + Q`, so this is just that, pro-rated. */

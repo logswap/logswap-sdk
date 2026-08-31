@@ -53,6 +53,8 @@ let multi3!: Hex;
 let launch!: Hex; // a launch pool mid-life (rung > 0), so both sides are tradeable
 let m3!: FPoolState;
 let live = false;
+// one unit of the F pools' quote, in wei — the devnet's USDC is 6-dec; resolved at setup
+let QUNIT = 10n ** 18n;
 
 try {
   const d = JSON.parse(readFileSync(DEPLOY, "utf8"));
@@ -87,6 +89,11 @@ try {
     await pub.waitForTransactionReceipt({ hash: h });
     await onboardToken(c, t, 1n << 200n);
   }
+  {
+    const { erc20Abi } = await import("viem");
+    const qdec = await pub.readContract({ address: d.usdc, abi: erc20Abi, functionName: "decimals" }).then(Number).catch(() => 18);
+    QUNIT = 10n ** BigInt(qdec);
+  }
   live = true;
 } catch {
   live = false;
@@ -106,7 +113,7 @@ const balOf = (t: Address) => c.public.readContract({ address: t, abi: ERC20, fu
 
 describe.skipIf(!live)("F writes against the local deployment", () => {
   it("quoteSwap is EXACT: the executed swap pays what the quote said", async () => {
-    const amountIn = 500n * 10n ** 18n;
+    const amountIn = 500n * QUNIT; // quote
     const quoted = await fPoolQuoteSwap(c, { poolId: multi3, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn });
     expect(quoted).toBeGreaterThan(0n);
     const before = await balOf(m3.bases[0]!);
@@ -116,8 +123,8 @@ describe.skipIf(!live)("F writes against the local deployment", () => {
 
   it("a base round trip never profits", async () => {
     const before = await balOf(m3.bases[1]!);
-    const got = await fPoolQuoteSwap(c, { poolId: multi3, kind: FPoolQuoteKind.QuoteIn, j: 1, amountIn: 200n * 10n ** 18n });
-    await mined(await fPoolSwapQuoteIn(c, { poolId: multi3, j: 1, amountIn: 200n * 10n ** 18n, account: user }));
+    const got = await fPoolQuoteSwap(c, { poolId: multi3, kind: FPoolQuoteKind.QuoteIn, j: 1, amountIn: 200n * QUNIT });
+    await mined(await fPoolSwapQuoteIn(c, { poolId: multi3, j: 1, amountIn: 200n * QUNIT, account: user }));
     await mined(await fPoolSwapBaseIn(c, { poolId: multi3, j: 1, amountIn: got, account: user }));
     expect(await balOf(m3.bases[1]!)).toBeLessThanOrEqual(before);
   });
@@ -131,7 +138,7 @@ describe.skipIf(!live)("F writes against the local deployment", () => {
   });
 
   it("mint then burn round-trips shares and never mints for free", async () => {
-    const dL = 1_000n * 10n ** 18n;
+    const dL = 1_000n * QUNIT; // exposure is quote units
     const s0 = await fPoolShareBalance(c, multi3, user);
     const q0 = await balOf(m3.quote);
     await mined(await fPoolMint(c, { poolId: multi3, dL, account: user }));
@@ -143,7 +150,7 @@ describe.skipIf(!live)("F writes against the local deployment", () => {
   });
 
   it("zapIn lives within previewZapIn, and zapOut needs the operator, once", async () => {
-    const dL = 500n * 10n ** 18n;
+    const dL = 500n * QUNIT;
     const need = await fPoolPreviewZapIn(c, multi3, dL);
     const q0 = await balOf(m3.quote);
     await mined(await fPoolZapIn(c, { poolId: multi3, dL, maxQuoteIn: need, account: user }));
@@ -159,7 +166,7 @@ describe.skipIf(!live)("F writes against the local deployment", () => {
   it("the launchpad loop: buy into a live launch, sell back, the pool keeps the fee", async () => {
     const st = await getFPool(c, launch);
     const tok = st.bases[0]!;
-    const spend = 20n * 10n ** 18n;
+    const spend = 20n * QUNIT;
     const got = await fPoolQuoteSwap(c, { poolId: launch, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: spend });
     expect(got).toBeGreaterThan(0n);
     const q0 = await balOf(st.quote);
@@ -198,8 +205,8 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
     shapeArgs.phi = 10n ** 16n + BigInt(Date.now() % 1000);
     await mined(await fPoolInitialize(c, { ...shapeArgs, account: user }));
     const id = await fPoolIdOf(c, shapeArgs);
-    await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * 10n ** 18n, x0: [0n], Q0: 0n, account: user }));
-    const got = await fPoolQuoteSwap(c, { poolId: id, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 10n * 10n ** 18n });
+    await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * QUNIT, x0: [0n], Q0: 0n, account: user }));
+    const got = await fPoolQuoteSwap(c, { poolId: id, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 10n * QUNIT });
     expect(got).toBeGreaterThan(0n);
     await mined(await fPoolSetAuthority(c, { poolId: id, next: "0x000000000000000000000000000000000000dEaD", account: user }));
     await expect(fPoolSetAuthority(c, { poolId: id, next: user, account: user })).rejects.toThrow(); // no longer ours
