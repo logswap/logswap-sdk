@@ -7,7 +7,13 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { marketTokens } from "../src/pools.js";
-import { clearTokenCache, memoryStore, setTokenStore } from "../src/tokencache.js";
+import {
+  clearTokenCache,
+  isResettableChain,
+  memoryStore,
+  setTokenStore,
+  type TokenStore,
+} from "../src/tokencache.js";
 import type { LogswapClient } from "../src/client.js";
 import type { PoolKey } from "../src/keys.js";
 
@@ -165,5 +171,69 @@ describe("token cache", () => {
       KEY,
     );
     expect(t.quote.decimals).toBe(6); // read from chain, not the poisoned 999
+  });
+});
+
+describe("a resettable chain never reaches the persistent store", () => {
+  /** A stand-in for `localStorage`: survives a "reload", and can be inspected. */
+  const persistent = () => {
+    const backing = new Map<string, string>();
+    const s: TokenStore = {
+      get: (k) => backing.get(k) ?? null,
+      set: (k, v) => void backing.set(k, v),
+      clear: () => backing.clear(),
+    };
+    return { store: s, backing };
+  };
+
+  it("classifies the dev chains and leaves the public ones alone", () => {
+    expect(isResettableChain(31337)).toBe(true); // anvil / hardhat default
+    expect(isResettableChain(31339)).toBe(true); // the logswap devnet
+    expect(isResettableChain(1)).toBe(false); // mainnet
+    expect(isResettableChain(8453)).toBe(false); // base
+  });
+
+  it("writes nothing durable for a local chain, so a reload re-reads", async () => {
+    const { store, backing } = persistent();
+    setTokenStore(store);
+    await marketTokens(client(async ({ functionName }) => (functionName === "decimals" ? 18 : "USDC"), 31337), KEY);
+    expect(backing.size).toBe(0); // memory only — nothing outlives the page
+  });
+
+  it("still persists a public chain, which is what the cache is for", async () => {
+    const { store, backing } = persistent();
+    setTokenStore(store);
+    await marketTokens(client(async ({ functionName }) => (functionName === "decimals" ? 6 : "USDC"), 1), KEY);
+    expect(backing.size).toBe(2); // base and quote
+  });
+
+  /**
+   * The actual incident. Anvil is redeployed, the deterministic addresses come back holding
+   * different mocks, and the page reloads. Before the fix the 18 written by the first deploy
+   * survived in `localStorage` and every quote amount rendered 10^12 too small.
+   */
+  it("does not serve a redeployed token's old decimals after a reload", async () => {
+    const { store, backing } = persistent();
+    // The entry as it actually survived: written durably by an earlier build, against the same
+    // deterministic address, before the chain was wiped and redeployed. Seeded directly rather
+    // than via a write + clearTokenCache, because a real reload calls neither — and a test that
+    // clears the store on its way through proves nothing about the store surviving.
+    backing.set(`31337:${(KEY.quote as string).toLowerCase()}`, JSON.stringify({ symbol: "USDC", decimals: 18 }));
+    setTokenStore(store);
+
+    const after = await marketTokens(
+      client(async ({ functionName }) => (functionName === "decimals" ? 6 : "USDC"), 31337),
+      KEY,
+    );
+    expect(after.quote.decimals).toBe(6); // the redeployed truth, not the stale 18
+  });
+
+  it("clearTokenCache empties the persistent store too, not just memory", async () => {
+    const { store, backing } = persistent();
+    setTokenStore(store);
+    await marketTokens(client(async ({ functionName }) => (functionName === "decimals" ? 6 : "USDC"), 1), KEY);
+    expect(backing.size).toBe(2);
+    clearTokenCache();
+    expect(backing.size).toBe(0); // used to survive, which made the function useless here
   });
 });

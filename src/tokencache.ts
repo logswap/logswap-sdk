@@ -15,9 +15,18 @@
  * 3. **A fallback symbol is never stored.** `symbol` degrades to `0x5FbD…` on failure, which is
  *    fine as a label but must not be persisted — one blip would name the token that forever.
  *
+ * 4. **A resettable chain never reaches the persistent store.** Rule 3's premise is that decimals
+ *    are immutable *for the life of a token*, and the key's premise is that an address names one
+ *    token forever. Both hold on a public chain. Neither holds on a local one: restart anvil and
+ *    the very same deterministic addresses come back holding DIFFERENT contracts. That is not
+ *    hypothetical — a `logswap.token.31337:0x5fbd…` entry saying USDC has 18 decimals outlived the
+ *    deploy that wrote it and made every quote-denominated number in the app read as zero, with
+ *    nothing anywhere reporting a fault. Those chains get the memory store, so a page reload is
+ *    enough to correct them.
+ *
  * Decimals are immutable for the life of a token: ERC-20 exposes no way to change them, and a token
  * that did would break every integration, not just this one. That is what makes an unbounded TTL
- * correct rather than merely convenient.
+ * correct rather than merely convenient — on a chain whose addresses are permanent.
  */
 
 import type { Address } from "viem";
@@ -31,6 +40,8 @@ export interface CachedToken {
 export interface TokenStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
+  /** Drop everything this store owns. Optional: a store that cannot enumerate may omit it. */
+  clear?(): void;
 }
 
 const memory = new Map<string, string>();
@@ -39,6 +50,7 @@ const memory = new Map<string, string>();
 export const memoryStore: TokenStore = {
   get: (k) => memory.get(k) ?? null,
   set: (k, v) => void memory.set(k, v),
+  clear: () => memory.clear(),
 };
 
 /**
@@ -64,6 +76,14 @@ export function browserStore(prefix = "logswap.token."): TokenStore {
           /* quota or private mode — the cache is an optimisation, never a requirement */
         }
       },
+      // Only this prefix, never the whole of localStorage: the app's own keys live there too.
+      clear: () => {
+        try {
+          for (const k of Object.keys(localStorage)) if (k.startsWith(prefix)) localStorage.removeItem(k);
+        } catch {
+          /* nothing to do — see set */
+        }
+      },
     };
   } catch {
     return memoryStore;
@@ -80,8 +100,32 @@ export function setTokenStore(s: TokenStore): void {
 /** Address casing varies by source, so normalise — otherwise the same token gets two entries. */
 const keyOf = (chainId: number, address: Address) => `${chainId}:${address.toLowerCase()}`;
 
+/**
+ * Chains whose addresses are not permanent identities: a development node can be wiped and
+ * redeployed, and because deployment addresses are derived from a deterministic nonce sequence the
+ * SAME address comes back holding a different contract. 1337 is ganache's and hardhat's legacy id,
+ * 31337 anvil's and hardhat's default, 31338 and 31339 the unimod and logswap devnets — both
+ * persisted with `--state`, both documented as resettable by deleting that file.
+ *
+ * Add to this set rather than removing from it: a chain wrongly listed here costs some RPC round
+ * trips, while one wrongly absent silently serves a stale scale, which is the bug this exists for.
+ */
+export const RESETTABLE_CHAINS: ReadonlySet<number> = new Set([1337, 31337, 31338, 31339]);
+
+/** True when a `(chainId, address)` pair cannot be trusted to name one contract forever. */
+export function isResettableChain(chainId: number): boolean {
+  return RESETTABLE_CHAINS.has(chainId);
+}
+
+/**
+ * The store an entry for this chain may use. A resettable chain gets memory — good enough to stop
+ * one navigation re-reading the same token fifty times, and gone on reload, which is exactly the
+ * lifetime over which its addresses can be trusted.
+ */
+const storeFor = (chainId: number): TokenStore => (isResettableChain(chainId) ? memoryStore : store);
+
 export function readCachedToken(chainId: number, address: Address): CachedToken | null {
-  const raw = store.get(keyOf(chainId, address));
+  const raw = storeFor(chainId).get(keyOf(chainId, address));
   if (!raw) return null;
   try {
     const v = JSON.parse(raw) as CachedToken;
@@ -98,7 +142,7 @@ export function readCachedToken(chainId: number, address: Address): CachedToken 
 }
 
 export function writeCachedToken(chainId: number, address: Address, t: CachedToken): void {
-  store.set(keyOf(chainId, address), JSON.stringify({ symbol: t.symbol, decimals: t.decimals }));
+  storeFor(chainId).set(keyOf(chainId, address), JSON.stringify({ symbol: t.symbol, decimals: t.decimals }));
 }
 
 /**
@@ -110,6 +154,10 @@ export function writeCachedToken(chainId: number, address: Address, t: CachedTok
  */
 export function clearTokenCache(): void {
   memory.clear();
+  // The persistent store too. It did not used to be, which made this function useless against the
+  // one situation its own doc names: the entry that survives a redeploy lives in `localStorage`,
+  // so clearing only memory left it in place and the next read served it straight back.
+  store.clear?.();
   onClear.forEach((f) => f());
 }
 
