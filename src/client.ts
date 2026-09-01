@@ -47,8 +47,15 @@ export function createLogswapClient(args: {
  * Cheap insurance worth taking at construction: without it, a manager from a different deployment
  * decodes into plausible-looking garbage rather than failing. `version` is bumped on any tier-1 or
  * tier-2 change (docs/app.md).
+ *
+ * **2** since 2026-09-01. It sat at 1 across a read surface that changed underneath it — the nine
+ * `public constant` getters left the manager for `CParams`, `move` gained its settlement bounds,
+ * `createMarket` arrived — so a 1 answered for two incompatible ABIs and this check passed against
+ * a manager it should have rejected. Observed, not theorised: a local chain running a pre-trim
+ * manager sailed through `assertVersion` while `FEE_MAX()` still answered on it. Move this in the
+ * same change as `CParams.VERSION`, never after it.
  */
-export const EXPECTED_VERSION = 1n;
+export const EXPECTED_VERSION = 2n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
