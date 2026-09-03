@@ -194,8 +194,8 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
     expect(pools.map((p) => p.poolId)).toContain(multi3);
   });
 
-  it("creates, seeds, trades, hands over, and refuses the wrong authority", async () => {
-    const { fPoolInitialize, fPoolIdOf, fPoolSeed, fPoolSetAuthority } = await import("../src/fpool.js");
+  it("creates, seeds, trades, proposes a handover, and refuses the wrong authority", async () => {
+    const { fPoolInitialize, fPoolIdOf, fPoolSeed, fPoolProposeAuthority, fPoolAcceptAuthority } = await import("../src/fpool.js");
     const st = await getFPool(c, multi3);
     const shapeArgs = {
       quote: st.quote, bases: [st.bases[0]!], weights: [10n ** 18n],
@@ -208,7 +208,12 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
     await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * QUNIT, x0: [0n], Q0: 0n, account: user }));
     const got = await fPoolQuoteSwap(c, { poolId: id, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 10n * QUNIT });
     expect(got).toBeGreaterThan(0n);
-    await mined(await fPoolSetAuthority(c, { poolId: id, next: "0x000000000000000000000000000000000000dEaD", account: user }));
-    await expect(fPoolSetAuthority(c, { poolId: id, next: user, account: user })).rejects.toThrow(); // no longer ours
+    // two steps (decisions 020): a proposal moves nothing, and only the proposed address can accept
+    const dead = "0x000000000000000000000000000000000000dEaD" as const;
+    await mined(await fPoolProposeAuthority(c, { poolId: id, next: dead, account: user }));
+    const after = await getFPool(c, id);
+    expect(after.authority.toLowerCase()).toBe(user.toLowerCase()); // still ours until accepted
+    expect(after.pendingAuthority.toLowerCase()).toBe(dead.toLowerCase());
+    await expect(fPoolAcceptAuthority(c, { poolId: id, account: user })).rejects.toThrow(); // not the proposed one
   });
 });

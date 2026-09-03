@@ -60,6 +60,8 @@ export function createLogswapClient(args: {
  * swept fees (decisions 018), which is why `exit`'s settle-to-one-asset math changed with it.
  */
 export const EXPECTED_VERSION = 3n;
+/** The F manager's own tag (contracts `2aa6b7b`: 2 — the two-step authority handover). */
+export const EXPECTED_F_VERSION = 2n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
@@ -73,5 +75,20 @@ export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSIO
       `logswap: manager at ${c.addresses.cPoolManager} reports version ${got}, but this SDK was built ` +
         `against version ${expected}. Upgrade the SDK or point at the matching deployment.`,
     );
+  }
+  // the F manager carries its own tag since contracts c782811; assert it the same way when deployed
+  if (c.addresses.fPoolManager) {
+    const { fPoolManagerAbi } = await import("./generated.js");
+    const gotF = await c.public.readContract({
+      address: c.addresses.fPoolManager,
+      abi: fPoolManagerAbi,
+      functionName: "version",
+    });
+    if (gotF !== EXPECTED_F_VERSION) {
+      throw new Error(
+        `logswap: F manager at ${c.addresses.fPoolManager} reports version ${gotF}, but this SDK was built ` +
+          `against F version ${EXPECTED_F_VERSION}. Upgrade the SDK or point at the matching deployment.`,
+      );
+    }
   }
 }

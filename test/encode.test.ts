@@ -30,7 +30,8 @@ import {
   fPoolInitialize,
   fPoolSeed,
   fPoolDissolve,
-  fPoolSetAuthority,
+  fPoolProposeAuthority,
+  fPoolAcceptAuthority,
   fPoolSwapQuoteIn,
   fPoolSwapBaseIn,
   fPoolSwapBaseForBase,
@@ -216,7 +217,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolQuoteSwap(c, { poolId: POOL, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 1n })).resolves.toBe(1n);
     await expect(fPoolQuoteSwap(c, { poolId: POOL, kind: FPoolQuoteKind.BaseForBase, j: 0, k: 1, amountIn: 1n })).resolves.toBe(1n);
   });
-  it("the lifecycle: initialize / seed / dissolve / setAuthority", async () => {
+  it("the lifecycle: initialize / seed / dissolve / proposeAuthority / acceptAuthority", async () => {
     const { c } = fakeClient();
     await expect(
       fPoolInitialize(c, {
@@ -226,7 +227,8 @@ describe("every F write helper encodes against the generated ABI", () => {
     ).resolves.toBe(HASH);
     await expect(fPoolSeed(c, { poolId: POOL, L0: 10n ** 21n, x0: [0n, 0n], Q0: 0n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolSetAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolProposeAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolAcceptAuthority(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
   });
   it("C market creation encodes", async () => {
     const { c } = fakeClient();

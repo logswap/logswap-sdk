@@ -55,6 +55,8 @@ export interface FPoolState {
   bigSigma: bigint;
   /** Creator (private) or a governance contract (public). Holds the floor lever. */
   authority: Address;
+  /** The proposed next authority, until it accepts — zero when nothing is pending (decisions 020). */
+  pendingAuthority: Address;
   /** Whether harvest is bounded by θ ≤ θ₀ — income only, never the floor's backing. */
   feesOnly: boolean;
   seeded: boolean;
@@ -92,6 +94,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     theta0: bigint;
     bigSigma: bigint;
     leverTheta: bigint;
+    pendingAuthority: Address;
   }>("getPool", [poolId]);
 
   const n = Number(p.n);
@@ -108,7 +111,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   // the ISOLATION SHADOW, not the derived reserve: what this pool actually holds of the token.
   // In a singleton the contract's balance backs many pools, so this is the only per-pool figure.
   const reserves = legs.map((l) => l[3]);
-  const { quote, Q, L, phi, theta0, bigSigma, authority, feesOnly, seeded, dissolved } = p;
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, feesOnly, seeded, dissolved } = p;
   const totalSupply = p.shares;
 
   return {
@@ -125,6 +128,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     compositeX,
     bigSigma,
     authority,
+    pendingAuthority,
     feesOnly,
     seeded,
     dissolved,
@@ -612,9 +616,18 @@ export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; account:
   return writeFPool(c, a.poolId, "dissolve", [], a.account);
 }
 
-/** Hand the lever to the next authority. Indexed on-chain via AuthoritySet. */
-export async function fPoolSetAuthority(c: LogswapClient, a: { poolId: Hex; next: Address; account: Address }) {
-  return writeFPool(c, a.poolId, "setAuthority", [a.next], a.account);
+/**
+ * Propose the next authority — step one of two (contracts `2aa6b7b`, decisions 020). Nothing moves
+ * until `next` accepts; proposing again (the zero address included) cancels a pending proposal.
+ * Indexed on-chain via AuthorityProposed.
+ */
+export async function fPoolProposeAuthority(c: LogswapClient, a: { poolId: Hex; next: Address; account: Address }) {
+  return writeFPool(c, a.poolId, "proposeAuthority", [a.next], a.account);
+}
+
+/** Accept a pending proposal — step two; only the proposed address can. Indexed via AuthoritySet. */
+export async function fPoolAcceptAuthority(c: LogswapClient, a: { poolId: Hex; account: Address }) {
+  return writeFPool(c, a.poolId, "acceptAuthority", [], a.account);
 }
 
 // ─── discovery from the log stream ────────────────────────────────────────────
