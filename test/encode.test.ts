@@ -32,6 +32,13 @@ import {
   fPoolDissolve,
   fPoolProposeAuthority,
   fPoolAcceptAuthority,
+  fPoolSetGates,
+  fPoolSetAllowed,
+  fPoolAppointOperator,
+  fPoolRaiseMinBuffer,
+  fPoolSetLegL,
+  fPoolAdmitLeg,
+  fPoolTransferShares,
   fPoolSwapQuoteIn,
   fPoolSwapBaseIn,
   fPoolSwapBaseForBase,
@@ -229,6 +236,17 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolProposeAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAcceptAuthority(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
+  });
+  it("the sponsor's controls and the desk encode", async () => {
+    const { c } = fakeClient();
+    await expect(fPoolSetGates(c, { poolId: POOL, gateMint: true, gateSwap: false, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolSetAllowed(c, { poolId: POOL, who: [A(0xb), A(0xc)], allowed: true, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolAppointOperator(c, { poolId: POOL, operator: A(0xd), account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolRaiseMinBuffer(c, { poolId: POOL, minBuffer: 223143551314209755n, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolSetLegL(c, { poolId: POOL, j: 1, newLj: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, x: 0n, account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, x: -(10n ** 18n), account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("C market creation encodes", async () => {
     const { c } = fakeClient();

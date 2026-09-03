@@ -28,6 +28,7 @@ import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 import type { LogswapClient } from "./client.js";
 
 const WAD = 10n ** 18n;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 /** Everything scalar about a basket pool, in one round trip's worth of reads. */
 export interface FPoolState {
@@ -57,6 +58,16 @@ export interface FPoolState {
   authority: Address;
   /** The proposed next authority, until it accepts — zero when nothing is pending (decisions 020). */
   pendingAuthority: Address;
+  /** The desk's hot key (`ma-private.md` §6): may reshape composition, never move value out. Zero when none. */
+  operator: Address;
+  /** `harvest` may not take Q/L under this (WAD log-distance); raise-only (decisions 021). */
+  minBuffer: bigint;
+  /** Only `allowed` accounts may receive minted shares. */
+  gateMint: boolean;
+  /** Only `allowed` takers may swap. */
+  gateSwap: boolean;
+  /** The block of the last lever / composition action: no swap runs in it. */
+  restructureBlock: number;
   /** Whether harvest is bounded by θ ≤ θ₀ — income only, never the floor's backing. */
   feesOnly: boolean;
   seeded: boolean;
@@ -88,6 +99,9 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     seeded: boolean;
     dissolved: boolean;
     n: number;
+    restructureBlock: number;
+    gateMint: boolean;
+    gateSwap: boolean;
     Q: bigint;
     L: bigint;
     shares: bigint;
@@ -95,6 +109,8 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     bigSigma: bigint;
     leverTheta: bigint;
     pendingAuthority: Address;
+    operator: Address;
+    minBuffer: bigint;
   }>("getPool", [poolId]);
 
   const n = Number(p.n);
@@ -111,7 +127,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   // the ISOLATION SHADOW, not the derived reserve: what this pool actually holds of the token.
   // In a singleton the contract's balance backs many pools, so this is the only per-pool figure.
   const reserves = legs.map((l) => l[3]);
-  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, feesOnly, seeded, dissolved } = p;
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, minBuffer, gateMint, gateSwap, restructureBlock, feesOnly, seeded, dissolved } = p;
   const totalSupply = p.shares;
 
   return {
@@ -129,6 +145,11 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     bigSigma,
     authority,
     pendingAuthority,
+    operator,
+    minBuffer,
+    gateMint,
+    gateSwap,
+    restructureBlock: Number(restructureBlock),
     feesOnly,
     seeded,
     dissolved,
@@ -237,9 +258,10 @@ export async function fPoolSwapBaseForBase(c: LogswapClient, a: FPoolSwapArgs & 
 /** Deposit dL/L of every reserve, receive shares ∝ dL. θ is untouched by construction. */
 export async function fPoolMint(
   c: LogswapClient,
-  a: { poolId: Hex; dL: bigint; maxQuoteIn?: bigint; account: Address },
+  a: { poolId: Hex; dL: bigint; maxQuoteIn?: bigint; account: Address; to?: Address },
 ) {
-  return writeFPool(c, a.poolId, "mint", [a.dL, a.maxQuoteIn ?? 2n ** 256n - 1n], a.account);
+  // shares go to `to` (the account by default); on a gated pool `to` must be allowed
+  return writeFPool(c, a.poolId, "mint", [a.to ?? a.account, a.dL, a.maxQuoteIn ?? 2n ** 256n - 1n], a.account);
 }
 
 /**
@@ -500,14 +522,15 @@ export enum FPoolQuoteKind {
  */
 export async function fPoolQuoteSwap(
   c: LogswapClient,
-  a: { poolId: Hex; kind: FPoolQuoteKind; j: number; k?: number; amountIn: bigint },
+  a: { poolId: Hex; kind: FPoolQuoteKind; j: number; k?: number; amountIn: bigint; taker?: Address },
 ): Promise<bigint> {
   try {
     await c.public.simulateContract({
       address: c.addresses.fPoolManager!,
       abi: fPoolManagerAbi,
       functionName: "quoteSwap",
-      args: [a.poolId, a.kind, BigInt(a.j), BigInt(a.k ?? 0), a.amountIn],
+      // the taker matters only on a gated pool: the connected account, or the zero address
+      args: [a.poolId, a.kind, BigInt(a.j), BigInt(a.k ?? 0), a.amountIn, a.taker ?? c.wallet?.account?.address ?? ZERO_ADDRESS],
     } as never);
   } catch (err) {
     const hit = findQuoteResult(err);
@@ -628,6 +651,90 @@ export async function fPoolProposeAuthority(c: LogswapClient, a: { poolId: Hex; 
 /** Accept a pending proposal — step two; only the proposed address can. Indexed via AuthoritySet. */
 export async function fPoolAcceptAuthority(c: LogswapClient, a: { poolId: Hex; account: Address }) {
   return writeFPool(c, a.poolId, "acceptAuthority", [], a.account);
+}
+
+// ─── the sponsor's controls and the desk (contracts bd3dd87, decisions 021) ───────────────
+
+/** `setLegL`'s "keep the stored mark" sentinel — the only legal `x` for a live leg. */
+export const NO_X = -(2n ** 255n);
+
+/** Turn the mint / swap gates on or off (authority). `burn` is never gated. */
+export async function fPoolSetGates(
+  c: LogswapClient,
+  a: { poolId: Hex; gateMint: boolean; gateSwap: boolean; account: Address },
+) {
+  return writeFPool(c, a.poolId, "setGates", [a.gateMint, a.gateSwap], a.account);
+}
+
+/** Add to or remove from the pool's list, in one call (authority). */
+export async function fPoolSetAllowed(
+  c: LogswapClient,
+  a: { poolId: Hex; who: readonly Address[]; allowed: boolean; account: Address },
+) {
+  return writeFPool(c, a.poolId, "setAllowed", [a.who, a.allowed], a.account);
+}
+
+/** Whether `who` is on the pool's list (consulted only while a gate is on). */
+export async function fPoolIsAllowed(c: LogswapClient, poolId: Hex, who: Address): Promise<boolean> {
+  return (await c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "allowed",
+    args: [poolId, who],
+  } as never)) as boolean;
+}
+
+/** Appoint (or clear, with the zero address) the operator — the hot key that reshapes and never moves value out. */
+export async function fPoolAppointOperator(c: LogswapClient, a: { poolId: Hex; operator: Address; account: Address }) {
+  return writeFPool(c, a.poolId, "appointOperator", [a.operator], a.account);
+}
+
+/**
+ * Raise the floor guard: `harvest` may not take Q/L under `minBuffer` (WAD log-distance; 20% below
+ * spot is ln 1.25 ≈ 0.223e18). Raise-only — a commitment the authority cannot walk back.
+ */
+export async function fPoolRaiseMinBuffer(c: LogswapClient, a: { poolId: Hex; minBuffer: bigint; account: Address }) {
+  return writeFPool(c, a.poolId, "raiseMinBuffer", [a.minBuffer], a.account);
+}
+
+/**
+ * Set leg `j`'s liquidity (operator, sole LP only): grow, shrink, retire (`newLj = 0`), or re-admit
+ * a retired leg at a named mark `x`. For a live leg leave `x` undefined — its mark is the market's.
+ * The base moves single-sidedly through the lock; shares adjust to hold the share value.
+ */
+export async function fPoolSetLegL(
+  c: LogswapClient,
+  a: { poolId: Hex; j: number; newLj: bigint; x?: bigint; account: Address },
+) {
+  return writeFPool(c, a.poolId, "setLegL", [BigInt(a.j), a.newLj, a.x ?? NO_X], a.account);
+}
+
+/** Admit a base the pool has never held, at a named mark, with liquidity `Lj` (operator, sole LP only). */
+export async function fPoolAdmitLeg(
+  c: LogswapClient,
+  a: { poolId: Hex; base: Address; Lj: bigint; x: bigint; account: Address },
+) {
+  return writeFPool(c, a.poolId, "admitLeg", [a.base, a.Lj, a.x], a.account);
+}
+
+/**
+ * Move shares (ERC-6909 `transfer`) — to another holder, or to `0xdead` to lock them for good.
+ * Burning to the dead address is a sponsor's way to make its liquidity permanent: the shares can
+ * never be redeemed, and they never count against the sole-LP precondition.
+ */
+export async function fPoolTransferShares(
+  c: LogswapClient,
+  a: { poolId: Hex; to: Address; shares: bigint; account: Address },
+) {
+  const wallet = requireWallet(c);
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "transfer",
+    args: [a.to, fPoolShareId(a.poolId), a.shares],
+    account: a.account,
+  } as never);
+  return wallet.writeContract(request as never);
 }
 
 // ─── discovery from the log stream ────────────────────────────────────────────

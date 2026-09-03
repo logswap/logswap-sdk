@@ -60,8 +60,8 @@ export function createLogswapClient(args: {
  * swept fees (decisions 018), which is why `exit`'s settle-to-one-asset math changed with it.
  */
 export const EXPECTED_VERSION = 3n;
-/** The F manager's own tag (contracts `2aa6b7b`: 2 — the two-step authority handover). */
-export const EXPECTED_F_VERSION = 2n;
+/** The F manager's own tag (contracts bd3dd87: 3 — the private pool; 2 was the two-step authority handover). */
+export const EXPECTED_F_VERSION = 3n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
