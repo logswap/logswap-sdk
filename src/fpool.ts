@@ -116,7 +116,9 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   const n = Number(p.n);
   const idx = Array.from({ length: n }, (_, i) => BigInt(i));
   const [theta, compositeX, legs] = await Promise.all([
-    rd<bigint>("theta", [poolId]),
+    // before the seed there is no L and no floor: θ is X by convention (the manager says so since
+    // bd3dd87's successor; older deployments revert with DivWadFailed, so do not ask them)
+    p.L > 0n ? rd<bigint>("theta", [poolId]) : rd<bigint>("compositeX", [poolId]),
     rd<bigint>("compositeX", [poolId]),
     Promise.all(idx.map((i) => rd<readonly [Address, bigint, bigint, bigint]>("legOf", [poolId, i]))),
   ]);
