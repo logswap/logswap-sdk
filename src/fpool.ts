@@ -238,12 +238,16 @@ export async function fPoolMint(
   return writeFPool(c, a.poolId, "mint", [a.dL, a.maxQuoteIn ?? 2n ** 256n - 1n], a.account);
 }
 
-/** Burn shares for the pro-rata slice of every reserve. Available at any Q, and after dissolution. */
+/**
+ * Burn shares for the pro-rata slice of every reserve. Available at any Q, and after dissolution.
+ * By owner since contracts `c782811` (decisions 019): the account burns its own shares; an
+ * operator may pass another owner's address, as on the C manager's `burnById`.
+ */
 export async function fPoolBurn(
   c: LogswapClient,
-  a: { poolId: Hex; shares: bigint; minQuoteOut?: bigint; account: Address },
+  a: { poolId: Hex; shares: bigint; minQuoteOut?: bigint; account: Address; owner?: Address },
 ) {
-  return writeFPool(c, a.poolId, "burn", [a.shares, a.minQuoteOut ?? 0n], a.account);
+  return writeFPool(c, a.poolId, "burn", [a.owner ?? a.account, a.shares, a.minQuoteOut ?? 0n], a.account);
 }
 
 // ─── zaps (on the router — one router, one Permit2 spender) ───────────────────

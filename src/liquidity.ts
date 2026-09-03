@@ -292,8 +292,9 @@ export async function edit(c: LogswapClient, a: EditArgs & { toFloor: bigint; to
     settle = settleInKind(key, recipient, a);
   } else {
     const p = await previewEdit(c, { key, fromId: a.fromId, shares: a.shares, toFloor: a.toFloor, toCap: a.toCap, newL: a.newL });
-    // the router sweeps the fees as quote before the update, so quote's open delta is fees − dQuote
-    const otherFlow = settleIn === "base" ? p.dQuote - p.fees : p.dBase; // + = owed, − = released
+    // the swept fees ride INSIDE dQuote (the manager burns by owner and nets them; decisions 018),
+    // so quote's open delta after the update is dQuote itself — `fees` is reported for display only
+    const otherFlow = settleIn === "base" ? p.dQuote : p.dBase; // + = owed, − = released
     const otherIsBase = settleIn === "quote";
     if (otherFlow < 0n) actions.push(swapExactInAction({ key, baseIn: otherIsBase, amountIn: OPEN_DELTA }));
     else if (otherFlow > 0n) actions.push(swapExactOutAction({ key, baseOut: otherIsBase, amountOut: OPEN_DELTA }));
