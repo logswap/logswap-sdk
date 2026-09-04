@@ -27,8 +27,8 @@ jobs:
         with:
           # The App's CLIENT ID, which GitHub now prefers over the numeric App ID as the JWT
           # issuer. Public metadata, not a credential — the private key is what signs, and it is
-          # the only secret this workflow needs. App: unimodular-ci.
-          app-id: Iv23liQW3rA6qn9mG00J
+          # the only secret this workflow needs. App: logswap-ci.
+          app-id: Iv23liWkm2OwzeoDzotY
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: logswap
           repositories: logswap-contract
