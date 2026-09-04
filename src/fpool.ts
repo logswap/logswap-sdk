@@ -590,7 +590,30 @@ export interface FPoolCreateArgs {
   /** true: the authority's harvest stops at the seed strike θ₀ (the launch posture). */
   feesOnly: boolean;
   authority: Address;
+  /**
+   * The differentiator, and nothing else. Identity is the key's hash, so one sponsor cannot run
+   * two pools of the same shape without varying it — the second `initialize` would land on the
+   * first pool's id. Defaults to zero, which is the first book of any shape. A pool's NAME is not
+   * this: names are mutable state (`fPoolSetName`), so a rename forks nothing.
+   */
+  salt?: Hex;
   account: Address;
+}
+
+const ZERO_SALT = `0x${"0".repeat(64)}` as const;
+
+/** `bytes32` ⇄ short UTF-8 text, for the pool and sponsor labels. */
+export function textToBytes32(text: string): Hex {
+  const b = new TextEncoder().encode(text);
+  if (b.length > 31) throw new Error(`logswap: "${text}" is ${b.length} bytes; a label holds 31`);
+  const out = new Uint8Array(32);
+  out.set(b);
+  return `0x${Array.from(out, (x) => x.toString(16).padStart(2, "0")).join("")}` as Hex;
+}
+export function bytes32ToText(word: Hex): string {
+  const bytes = (word.slice(2).match(/../g) ?? []).map((h) => parseInt(h, 16));
+  const end = bytes.findIndex((x) => x === 0);
+  return new TextDecoder().decode(new Uint8Array(end === -1 ? bytes : bytes.slice(0, end)));
 }
 
 /** Sort legs by base address (the key's canonical order), carrying companion arrays along. */
@@ -604,7 +627,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
   const sum = a.weights.reduce((x, y) => x + y, 0n);
   if (sum !== 10n ** 18n) throw new Error(`logswap: weights sum to ${sum}, expected 1e18`);
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority, salt: a.salt ?? ZERO_SALT };
   const wallet = requireWallet(c);
   const { request } = await c.public.simulateContract({
     address: c.addresses.fPoolManager!,
@@ -619,7 +642,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
 /** The pool id is the key's hash — pure, so it can be read before or after creation. */
 export async function fPoolIdOf(c: LogswapClient, a: Omit<FPoolCreateArgs, "account">): Promise<Hex> {
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority, salt: a.salt ?? ZERO_SALT };
   return c.public.readContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
@@ -688,6 +711,38 @@ export async function fPoolIsAllowed(c: LogswapClient, poolId: Hex, who: Address
     functionName: "allowed",
     args: [poolId, who],
   } as never)) as boolean;
+}
+
+/** Label the pool — the sponsor's own words, mutable, never identity. At most 31 bytes of UTF-8. */
+export async function fPoolSetName(c: LogswapClient, a: { poolId: Hex; name: string; account: Address }) {
+  return writeFPool(c, a.poolId, "setName", [textToBytes32(a.name)], a.account);
+}
+
+/**
+ * What the PROTOCOL says an address is — "Keyrock". Only `feeCollector` may write it, which is
+ * what makes it an attestation rather than a claim anyone could make about themselves.
+ */
+export async function fPoolSetSponsorName(c: LogswapClient, a: { who: Address; name: string; account: Address }) {
+  const wallet = requireWallet(c);
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "setSponsorName",
+    args: [a.who, textToBytes32(a.name)],
+    account: a.account,
+  } as never);
+  return wallet.writeContract(request as never);
+}
+
+/** The protocol's attestation for an address, or "" when unattested — which most addresses are. */
+export async function fPoolSponsorName(c: LogswapClient, who: Address): Promise<string> {
+  const word = (await c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "sponsorName",
+    args: [who],
+  } as never)) as Hex;
+  return bytes32ToText(word);
 }
 
 /** Appoint (or clear, with the zero address) the operator — the hot key that reshapes and never moves value out. */
