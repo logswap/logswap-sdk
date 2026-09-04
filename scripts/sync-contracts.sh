@@ -3,14 +3,14 @@
 # ./contracts.ref. NO git submodule — a plain clone the SDK owns and refreshes.
 #
 #   Local dev:  npm run contracts:sync
-#   CI:         CONTRACTS_REPO=https://x-access-token:$TOKEN@github.com/unimodularxyz/logswap-contract.git \
+#   CI:         CONTRACTS_REPO=https://x-access-token:$TOKEN@github.com/logswap/logswap-contract.git \
 #                 npm run contracts:sync
 #
 # The pinned ref is the single source of truth for WHICH contract version this SDK build embeds.
 # ABIs flow contracts -> SDK, never the reverse; nothing here is ever hand-copied.
 set -euo pipefail
 
-REPO="${CONTRACTS_REPO:-git@github.com:unimodularxyz/logswap-contract.git}"
+REPO="${CONTRACTS_REPO:-git@github.com:logswap/logswap-contract.git}"
 REF="${CONTRACTS_REF:-$(tr -d ' \n\r' < contracts.ref)}"
 DIR="contracts"
 
