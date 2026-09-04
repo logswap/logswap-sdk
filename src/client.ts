@@ -60,7 +60,17 @@ export function createLogswapClient(args: {
  * swept fees (decisions 018), which is why `exit`'s settle-to-one-asset math changed with it.
  */
 export const EXPECTED_VERSION = 3n;
-/** The F manager's own tag (contracts 25a7bcf: 5 — the key's salt, pool names, the sponsor registry; 4 was the income-only harvest cut). */
+/**
+ * The F manager's own tag (contracts 25a7bcf: 5 — the key's salt, pool names, the sponsor registry;
+ * 4 was the income-only harvest cut).
+ *
+ * A FLOOR, not an equality — unlike `EXPECTED_VERSION` above. The F primitive is iterating fast and
+ * its bumps are mostly additive (6 is `multicall`, which nothing this SDK calls goes near), so an
+ * exact match meant each one bricked every app on the deployment until the SDK was republished — a
+ * version wall in front of a change that broke nothing. The cost is that a genuinely breaking bump
+ * passes it; when one lands, raise this constant in the same change, which is the discipline
+ * `EXPECTED_VERSION` enforces mechanically and this one asks for.
+ */
 export const EXPECTED_F_VERSION = 5n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
@@ -84,10 +94,10 @@ export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSIO
       abi: fPoolManagerAbi,
       functionName: "version",
     });
-    if (gotF !== EXPECTED_F_VERSION) {
+    if (gotF < EXPECTED_F_VERSION) {
       throw new Error(
-        `logswap: F manager at ${c.addresses.fPoolManager} reports version ${gotF}, but this SDK was built ` +
-          `against F version ${EXPECTED_F_VERSION}. Upgrade the SDK or point at the matching deployment.`,
+        `logswap: F manager at ${c.addresses.fPoolManager} reports version ${gotF}, but this SDK needs ` +
+          `at least F version ${EXPECTED_F_VERSION}. Upgrade the deployment or point at a newer one.`,
       );
     }
   }
