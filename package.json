@@ -43,6 +43,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/unimodularxyz/logswap-sdk.git"
+    "url": "git+https://github.com/logswap/logswap-sdk.git"
   }
 }

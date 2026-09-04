@@ -21,7 +21,7 @@ jobs:
           submodules: recursive
 
       # Short-lived token from the org GitHub App to read the private contracts repo. The App must
-      # be installed on unimodularxyz/logswap-contract for this to resolve.
+      # be installed on logswap/logswap-contract for this to resolve.
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
         with:
@@ -30,10 +30,10 @@ jobs:
           # the only secret this workflow needs. App: unimodular-ci.
           app-id: Iv23liQW3rA6qn9mG00J
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: unimodularxyz
+          owner: logswap
           repositories: logswap-contract
       - name: Configure contracts clone URL (codegen clones logswap-contract via the App token)
-        run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/unimodularxyz/logswap-contract.git" >> "$GITHUB_ENV"
+        run: echo "CONTRACTS_REPO=https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/logswap/logswap-contract.git" >> "$GITHUB_ENV"
 
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1 — old pin predated foundryup's binary installer and died with 'cannot execute binary file'
         with:

@@ -1,6 +1,6 @@
 # logswap-sdk
 
-TypeScript SDK for [Logswap](https://github.com/unimodularxyz/logswap-contract), the liquidity
+TypeScript SDK for [Logswap](https://github.com/logswap/logswap-contract), the liquidity
 primitive introducing the **logarithmic invariant** — typed wrappers over the `CPoolManager` /
 `FPoolManager` / `LogswapRouter` / `LogswapLens` surface.
 
