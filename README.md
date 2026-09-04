@@ -94,8 +94,12 @@ runs once and explicitly rather than being chained into both.
 ## Install
 
 ```bash
-npm i @unimodular/logswap-sdk viem
+npm i @logswap/sdk viem
 ```
+
+Published as **`@logswap/sdk`** from v0.5.35. Everything up to v0.5.34 was
+`@unimodular/logswap-sdk`, which is deprecated and points here — the code is identical, only the
+name moved, along with the repos to the `logswap` org.
 
 `viem` is a peer dependency. The package ships `dist/` plus `src/`, including the generated ABIs, so
 the contract surface it was built against travels with it.
