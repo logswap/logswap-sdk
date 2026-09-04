@@ -623,6 +623,7 @@ export function textToBytes32(text: string): Hex {
   return `0x${Array.from(out, (x) => x.toString(16).padStart(2, "0")).join("")}` as Hex;
 }
 export function bytes32ToText(word: Hex): string {
+  if (!word) return ""; // a manager older than the field answers with nothing at all
   const bytes = (word.slice(2).match(/../g) ?? []).map((h) => parseInt(h, 16));
   const end = bytes.findIndex((x) => x === 0);
   return new TextDecoder().decode(new Uint8Array(end === -1 ? bytes : bytes.slice(0, end)));

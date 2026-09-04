@@ -84,7 +84,11 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, leverTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), feesOnly: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n };
+          bigSigma: 0n, authority: A(0xa), feesOnly: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n,
+          // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
+          // TypeError in the browser, which is what this fake exists to catch first
+          pendingAuthority: A(0), operator: A(0), minBuffer: 0n, gateMint: false, gateSwap: false,
+          restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}` };
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
       if (q.functionName === "shareIdOf") return (1n << 255n) | (BigInt(POOL) >> 1n);
