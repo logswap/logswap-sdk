@@ -183,7 +183,11 @@ export async function describeFPool(c: LogswapClient, s: FPoolState): Promise<FP
       functionName,
       args: [s.poolId],
     } as never) as Promise<T>;
-  const [feePerL, edgePerL] = await Promise.all([rd<bigint>("feePerL"), rd<bigint>("edgePerL")]);
+  // an unseeded pool has no L: nothing earned, and θ (hence feePerL, hence edgePerL) is not
+  // defined at L = 0. Older deployments revert with DivWadFailed rather than answering zero.
+  const [feePerL, edgePerL] = s.L > 0n
+    ? await Promise.all([rd<bigint>("feePerL"), rd<bigint>("edgePerL")])
+    : [0n, 0n];
   return {
     shape: s.bases.length === 1 ? "launch" : "basket",
     legs: s.bases.length,
