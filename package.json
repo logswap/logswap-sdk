@@ -26,7 +26,7 @@
     "clean": "rm -rf dist src/generated.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run codegen && npm run build"
   },
   "peerDependencies": {
     "viem": "^2.0.0"
