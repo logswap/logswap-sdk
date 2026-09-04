@@ -1,5 +1,5 @@
 {
-  "name": "@unimodular/logswap-sdk",
+  "name": "@logswap/sdk",
   "version": "0.5.34",
   "description": "TypeScript SDK for Logswap, the liquidity primitive introducing the logarithmic invariant — typed wrappers over the CPoolManager / FPoolManager / Router / Lens surface.",
   "license": "GPL-2.0-or-later",
