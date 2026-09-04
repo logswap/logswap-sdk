@@ -117,6 +117,13 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     name: Hex;
   }>("getPool", [poolId]);
 
+  // A pool that was never created reads as an all-zero struct rather than reverting, so the
+  // absence has to be named here or every caller mistakes "no such pool" for "a pool holding
+  // nothing". `quote` is the manager's own existence test (`_live`), and it is what the create
+  // flow's resumability turns on: an initialized-but-unseeded pool MUST still read, so this
+  // cannot be a check on `seeded`.
+  if (/^0x0{40}$/i.test(p.quote)) throw new Error(`logswap: no F pool with id ${poolId}`);
+
   const n = Number(p.n);
   const idx = Array.from({ length: n }, (_, i) => BigInt(i));
   const [theta, compositeX, legs] = await Promise.all([
