@@ -60,6 +60,8 @@ export interface FPoolState {
   pendingAuthority: Address;
   /** The desk's hot key (`ma-private.md` §6): may reshape composition, never move value out. Zero when none. */
   operator: Address;
+  /** The sponsor's own label for this pool, mutable and never identity. "" when unnamed. */
+  name: string;
   /** `harvest` may not take Q/L under this (WAD log-distance); raise-only (decisions 021). */
   minBuffer: bigint;
   /** Only `allowed` accounts may receive minted shares. */
@@ -111,6 +113,8 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     pendingAuthority: Address;
     operator: Address;
     minBuffer: bigint;
+    incomeTaken: bigint;
+    name: Hex;
   }>("getPool", [poolId]);
 
   const n = Number(p.n);
@@ -148,6 +152,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     authority,
     pendingAuthority,
     operator,
+    name: bytes32ToText(p.name),
     minBuffer,
     gateMint,
     gateSwap,
