@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { encodeFunctionData, toFunctionSelector, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Address, type Hex } from "viem";
 import { foundry } from "viem/chains";
 import { createLogswapClient, type LogswapClient } from "../src/client.js";
 import { mint, zapIn, update, move, harvest, deepen, floor, cap, shift, resize, exit, reprice, edit, burn } from "../src/liquidity.js";
@@ -32,6 +32,9 @@ import {
   fPoolReserveAt,
   fPoolDissolve,
   fPoolRelaunch,
+  fPoolLaunch,
+  fPoolLaunchCalls,
+  fPoolManagerAbi,
   fPoolClaim,
   fPoolDividendOf,
   fPoolRollIn,
@@ -284,6 +287,44 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolRollIn(c, { poolId: POOL, gen: 0, shares: 5n, dL: 10n ** 21n, account: A(0xb) })).resolves.toBe(HASH);
     await expect(fPoolProposeAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAcceptAuthority(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
+  });
+  it("the launch: one multicall of initialize / seed / the seed lock / the opening buy / the name / the gates", async () => {
+    const { c, encoded } = fakeClient();
+    const DEAD = "0x000000000000000000000000000000000000dEaD";
+    const key = { quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], phi: 10n ** 16n, lockStrike: true, authority: A(0xa) };
+    // viem's decoder checksums addresses; the assertions below compare lower-cased
+    const lower = (v: unknown): unknown =>
+      typeof v === "string" ? v.toLowerCase() : Array.isArray(v) ? v.map(lower) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, lower(x)])) : v;
+    const names = (calls: Hex[]) =>
+      calls.map((d) => {
+        const { functionName, args } = decodeFunctionData({ abi: fPoolManagerAbi, data: d });
+        return { functionName, args: lower(args) as readonly unknown[] | undefined };
+      });
+    // a pad: initialize, seed at Q = 0, the seed to 0xdead, the opening buy on the manager (the
+    // same sender, a plain allowance — never the router, which would be the authority), the name
+    const pad = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 0n, r0: [4n * 10n ** 20n, 6n * 10n ** 20n], lockSeed: true, openBuy: { j: 0, amountIn: 7n }, name: "PAD", account: A(0xa) }));
+    expect(pad.map((d) => d.functionName)).toEqual(["initialize", "seed", "transfer", "swapQuoteIn", "setName"]);
+    // the key and the reserves are SORTED together: 0x9 before 0xb, weights and r0 follow
+    expect((pad[0]!.args![0] as { bases: Address[]; weights: bigint[] }).bases).toEqual([A(0x9), A(0xb)]);
+    expect((pad[0]!.args![0] as { bases: Address[]; weights: bigint[] }).weights).toEqual([6n * 10n ** 17n, 4n * 10n ** 17n]);
+    expect(pad[1]!.args).toEqual([POOL, 10n ** 21n, [6n * 10n ** 20n, 4n * 10n ** 20n], 0n]);
+    // the lock: every share the seed minted to the creator (L0 minus MIN_SHARES) goes to 0xdead
+    expect(pad[2]!.args![0]).toBe(DEAD.toLowerCase());
+    expect(pad[2]!.args![2]).toBe(10n ** 21n - 1000n);
+    // the buy names the leg by its SORTED index — j = 0 as given (0xb) is leg 1 once sorted
+    expect(pad[3]!.args).toEqual([POOL, 1n, 7n, 0n, A(0xa)]);
+    // a private pool: gate minting, list the creator, appoint them operator; an initialized pool
+    // that a stranded launch left behind is not initialized again; `extra` rides last
+    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], privatePool: true, initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "raiseMinBuffer", args: [POOL, 1n] })], account: A(0xa) }));
+    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "appointOperator", "raiseMinBuffer"]);
+    expect(priv[1]!.args).toEqual([POOL, true, false]);
+    expect(priv[2]!.args).toEqual([POOL, [A(0xa)], true]);
+    // and sent: ONE manager write, the multicall (the fake logs its simulate and its send)
+    await expect(fPoolLaunch(c, { ...key, L0: 10n ** 21n, Q0: 0n, r0: [4n * 10n ** 20n, 6n * 10n ** 20n], account: A(0xa) })).resolves.toEqual({ hash: HASH, poolId: POOL });
+    expect(encoded.filter((f) => f === "multicall").length).toBe(2);
+    expect(encoded).not.toContain("initialize");
+    // the weights are checked here, where the message is readable
+    expect(() => fPoolLaunchCalls(POOL, { ...key, weights: [10n ** 17n, 10n ** 17n], L0: 10n ** 21n, Q0: 0n, r0: [1n, 1n], account: A(0xa) })).toThrow(/weights/);
   });
   it("the sponsor's controls and the desk encode", async () => {
     const { c } = fakeClient();

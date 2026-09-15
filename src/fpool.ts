@@ -920,6 +920,108 @@ export async function fPoolRelaunch(
   return writeFPool0(c, "multicall", [calls], a.account);
 }
 
+/** ERC-6909 shares sent here are locked for good — the seed's custody (custody.md §4(b)). */
+export const DEAD_ADDRESS: Address = "0x000000000000000000000000000000000000dEaD";
+/** The manager's `MIN_SHARES`: the seed mints this much to 0xdead itself, the rest to the seeder. */
+export const F_MIN_SHARES = 1000n;
+
+export interface FPoolLaunchArgs extends Omit<FPoolCreateArgs, "account"> {
+  L0: bigint;
+  /** Quote the seed pulls. A pad seeds at 0 — pure float, a resting ask, nothing raised. */
+  Q0: bigint;
+  /**
+   * Send every share the seed mints to the creator (`L0 − MIN_SHARES`) to 0xdead in the same
+   * batch: the float and the raise can never be burned out from under the buyers. The lever
+   * (harvest) is the authority's and survives it; the exit does not. A pad's default posture.
+   */
+  lockSeed?: boolean;
+  /**
+   * An opening buy of leg `j` (an index into `bases` AS GIVEN) for `amountIn` of quote, ON THE
+   * MANAGER — the same sender, a plain allowance to the manager, the router nowhere near it. A
+   * pad seeds at Q = 0, so until someone trades it the mark sits at p₀; buying inside the launch
+   * gives it a price that has moved and a buffer under it. Nothing can trade between the seed and
+   * this buy — they are one transaction — so `minOut` is safe at its default of 0.
+   */
+  openBuy?: { j: number; amountIn: bigint; minOut?: bigint };
+  /** The pool's label, set in the batch (≤ 31 bytes of UTF-8). */
+  name?: string;
+  /** Gate minting, list the creator, appoint them operator (decisions 021) — three calls, in the batch. */
+  privatePool?: boolean;
+  /**
+   * The pool already exists (a previous launch got as far as `initialize` and no further — a seed
+   * that reverted, a closed tab, before the launch was one transaction), so `initialize` is left
+   * out: the key is a pure function of the arguments and a second `initialize` can only revert.
+   */
+  initialized?: boolean;
+  /** Anything else, pre-encoded against {@link fPoolManagerAbi}, appended after the above. */
+  extra?: Hex[];
+  account: Address;
+}
+
+/**
+ * The launch's calls, in order — the batch {@link fPoolLaunch} sends. Pure, so a form can show
+ * what it is about to send, and a test can decode it. Legs are sorted here with their weights and
+ * reserves (the key's canonical order; `openBuy.j` is re-indexed to match), and the weights are
+ * checked here, where the message is readable.
+ */
+export function fPoolLaunchCalls(
+  poolId: Hex,
+  a: FPoolLaunchArgs & ({ r0: bigint[] } | { x0: bigint[] }),
+): Hex[] {
+  const sum = a.weights.reduce((x, y) => x + y, 0n);
+  if (sum !== WAD) throw new Error(`logswap: weights sum to ${sum}, expected 1e18`);
+  const given = "r0" in a ? a.r0 : a.x0.map((x, j) => fPoolReserveAt((a.weights[j]! * a.L0) / WAD, x));
+  if (given.length !== a.bases.length) throw new Error(`logswap: ${given.length} reserves for ${a.bases.length} legs`);
+  const { bases, companions } = sortFPoolLegs(a.bases, a.weights, given);
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, lockStrike: a.lockStrike, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const enc = (functionName: string, args: unknown[]) =>
+    encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
+  const calls: Hex[] = [];
+  if (!a.initialized) calls.push(enc("initialize", [key]));
+  calls.push(enc("seed", [poolId, a.L0, companions[1]!, a.Q0]));
+  // gen 0 by construction: a launch is the pool's FIRST seed — a relaunch is `fPoolRelaunch`
+  if (a.lockSeed) calls.push(enc("transfer", [DEAD_ADDRESS, fPoolShareId(poolId, 0), a.L0 - F_MIN_SHARES]));
+  if (a.openBuy) {
+    const j = bases.indexOf(a.bases[a.openBuy.j]!);
+    if (j < 0) throw new Error(`logswap: openBuy.j = ${a.openBuy.j} is not a leg`);
+    calls.push(enc("swapQuoteIn", [poolId, BigInt(j), a.openBuy.amountIn, a.openBuy.minOut ?? 0n, a.account]));
+  }
+  if (a.name) calls.push(enc("setName", [poolId, textToBytes32(a.name)]));
+  if (a.privatePool) {
+    calls.push(enc("setGates", [poolId, true, false]));
+    calls.push(enc("setAllowed", [poolId, [a.account], true]));
+    calls.push(enc("appointOperator", [poolId, a.account]));
+  }
+  calls.push(...(a.extra ?? []));
+  return calls;
+}
+
+/**
+ * Create a pool as ONE transaction: `initialize`, `seed`, the seed lock, the opening buy, the
+ * name, the private-pool gates — the manager's `multicall`, the creator as sender throughout.
+ * Either every call lands or none does; there is no half-built pool to resume.
+ *
+ * Why the manager and not the router: every one of these entries authenticates by `msg.sender`
+ * (`seed` is authority-only, so is everything after it). Routed, the router would be the sender
+ * — the authority, the holder of the seed shares — and the handover back is two-step, so it
+ * could not even close in the same transaction. `multicall` is delegatecall-to-self, so the
+ * sender survives, which is what the manager's own doc says a router cannot do.
+ *
+ * What the batch PULLS, by plain allowance to the manager (never Permit2): `r0[j]` of each base,
+ * `Q0` of quote, plus `openBuy.amountIn` of quote. Grant those first — one `approve` per token,
+ * once ever ({@link approveTokenForFPoolManager}, {@link fPoolManagerAllowanceOk}).
+ *
+ * Returns the hash and the pool's id (the key's hash, {@link fPoolIdOf}).
+ */
+export async function fPoolLaunch(
+  c: LogswapClient,
+  a: FPoolLaunchArgs & ({ r0: bigint[] } | { x0: bigint[] }),
+): Promise<{ hash: Hash; poolId: Hex }> {
+  const poolId = await fPoolIdOf(c, a);
+  const hash = await writeFPool0(c, "multicall", [fPoolLaunchCalls(poolId, a)], a.account);
+  return { hash, poolId };
+}
+
 /**
  * Propose the next authority — step one of two (contracts `2aa6b7b`, decisions 020). Nothing moves
  * until `next` accepts; proposing again (the zero address included) cancels a pending proposal.
