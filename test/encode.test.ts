@@ -36,6 +36,11 @@ import {
   fPoolDividendOf,
   fPoolRollIn,
   fPoolPreviewRollIn,
+  fPoolShareId,
+  fPoolGenOfShareId,
+  fPoolBundleOf,
+  fPoolClaimsOf,
+  fPoolRedeem,
   fPoolProposeAuthority,
   fPoolAcceptAuthority,
   fPoolSetGates,
@@ -90,16 +95,18 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, leverTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), lockStrike: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n,
+          bigSigma: 0n, authority: A(0xa), lockStrike: true, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
           pendingAuthority: A(0), operator: A(0), minBuffer: 0n, gateMint: false, gateSwap: false,
-          restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}`, successor: `0x${"0".repeat(64)}` };
+          restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}` };
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
-      if (q.functionName === "shareIdOf") return (1n << 255n) | (BigInt(POOL) >> 1n);
+      if (q.functionName === "shareIdOf") return (1n << 255n) | ((BigInt(POOL) >> 17n) << 16n) | BigInt((q.args?.[1] as bigint) ?? 0n);
       if (q.functionName === "idOf") return POOL;
       if (q.functionName === "previewRollIn") return [10n ** 21n, 0n, 5n];
+      if (q.functionName === "bundleOf") return [10n ** 21n, 5n, [10n ** 21n]];
+      if (q.functionName === "fClaimsOf") return [{ gen: 0n, shares: 5n, base: [10n ** 20n], quote: 1n, dividend: 0n }];
       // the edit tree reads the class (lens.unpack + positions) and previews (lens.previewUpdate)
       if (q.functionName === "unpack") return [POOL, -5n, 10n, true];
       if (q.functionName === "positions") return [10n ** 21n, 10n ** 21n, 0n, 0n];
@@ -252,20 +259,29 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(fPoolReserveAt(10n ** 21n, 0n)).toBe(10n ** 21n);
     expect(Number(fPoolReserveAt(10n ** 21n, 693147180559945309n)) / 5e20).toBeCloseTo(1, 12); // e^{-ln 2}, to float precision
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolDissolve(c, { poolId: POOL, successor: POOL, account: A(0xa) })).resolves.toBe(HASH);
-    // the relaunch: one multicall of initialize / dissolve / burn / seed (decisions 025)
+    // the relaunch, in place: one multicall of dissolve / redeem / seed (decisions 025, 032)
     await expect(
-      fPoolRelaunch(c, {
-        poolId: POOL,
-        nextKey: { quote: A(0xc), bases: [A(0xb)], weights: [10n ** 18n], phi: 10n ** 16n, lockStrike: false, authority: A(0xa) },
-        shares: 10n ** 21n, L0: 10n ** 21n, Q0: 0n, r0: [10n ** 21n], account: A(0xa),
-      }),
+      fPoolRelaunch(c, { poolId: POOL, shares: 10n ** 21n, L0: 10n ** 21n, Q0: 0n, r0: [10n ** 21n], account: A(0xa) }),
     ).resolves.toBe(HASH);
-    // the dividend (decisions 028) and the roll (025)
+    await expect(
+      fPoolRelaunch(c, { poolId: POOL, shares: 0n, L0: 10n ** 21n, Q0: 0n, x0: [0n], weights: [10n ** 18n], account: A(0xa) }),
+    ).resolves.toBe(HASH);
+    // the generation in the id (032): bit 255, the pool id's top 239 bits, gen in the low 16
+    expect(fPoolShareId(POOL, 0) >> 255n).toBe(1n);
+    expect(fPoolShareId(POOL, 3) & 0xffffn).toBe(3n);
+    expect(fPoolShareId(POOL, 3) >> 16n).toBe(fPoolShareId(POOL, 0) >> 16n);
+    expect(fPoolGenOfShareId(fPoolShareId(POOL, 7))).toBe(7);
+    // the retired generation: its bundle, a holder's claims, the redeem
+    await expect(fPoolBundleOf(c, POOL, 0)).resolves.toEqual({ supply: 10n ** 21n, quote: 5n, base: [10n ** 21n] });
+    await expect(fPoolClaimsOf(c, POOL, A(0xb))).resolves.toEqual([{ gen: 0, shares: 5n, base: [10n ** 20n], quote: 1n, dividend: 0n }]);
+    await expect(fPoolRedeem(c, { poolId: POOL, gen: 0, shares: 5n, account: A(0xb) })).resolves.toBe(HASH);
+    // the dividend (decisions 028) and the roll (025, 032): the live generation by default, or named
     await expect(fPoolClaim(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
+    await expect(fPoolClaim(c, { poolId: POOL, gen: 0, account: A(0xb) })).resolves.toBe(HASH);
     await expect(fPoolDividendOf(c, POOL, A(0xb))).resolves.toBe(0n);
-    await expect(fPoolPreviewRollIn(c, POOL, POOL, A(0xb), 5n)).resolves.toEqual({ dL: 10n ** 21n, quoteShort: 0n, quoteExcess: 5n });
-    await expect(fPoolRollIn(c, { fromPool: POOL, toPool: POOL, shares: 5n, dL: 10n ** 21n, account: A(0xb) })).resolves.toBe(HASH);
+    await expect(fPoolDividendOf(c, POOL, A(0xb), 0)).resolves.toBe(0n);
+    await expect(fPoolPreviewRollIn(c, POOL, 0, A(0xb), 5n)).resolves.toEqual({ dL: 10n ** 21n, quoteShort: 0n, quoteExcess: 5n });
+    await expect(fPoolRollIn(c, { poolId: POOL, gen: 0, shares: 5n, dL: 10n ** 21n, account: A(0xb) })).resolves.toBe(HASH);
     await expect(fPoolProposeAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAcceptAuthority(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
   });
@@ -279,6 +295,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, r: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
     await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, R: 2n * 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
     await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, gen: 0, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("C market creation encodes", async () => {
     const { c } = fakeClient();

@@ -85,10 +85,14 @@ export interface FPoolState {
    * The pad's promise. Pairs with a locked seed (shares at 0xdead) — the class is the two bits.
    */
   lockStrike: boolean;
+  /** False before the first seed — and between a dissolve and the next one (decisions 032). */
   seeded: boolean;
-  dissolved: boolean;
-  /** The pool this one dissolved into (decisions 025) — the relaunch's lineage; zero when none. */
-  successor: Hex;
+  /**
+   * The live GENERATION (decisions 032). Every dissolve retires one into a frozen bundle its
+   * shares redeem ({@link fPoolRedeem}) and opens the next; the share id carries it
+   * ({@link fPoolShareId}), so generations `0 … gen-1` are retired claims and `gen` is the pool.
+   */
+  gen: number;
   totalSupply: bigint;
   /** What the pool holds of each base — the STATE since decisions 026; the mark `x` is derived from it. */
   reserves: bigint[];
@@ -114,7 +118,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     authority: Address;
     lockStrike: boolean;
     seeded: boolean;
-    dissolved: boolean;
+    gen: number;
     n: number;
     restructureBlock: number;
     gateMint: boolean;
@@ -130,7 +134,6 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     minBuffer: bigint;
     incomeTaken: bigint;
     name: Hex;
-    successor: Hex;
   }>("getPool", [poolId]);
 
   // A pool that was never created reads as an all-zero struct rather than reverting, so the
@@ -154,7 +157,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   const weights = legs.map((l) => l[1]);
   const x = legs.map((l) => l[2]); // derived by the manager: x_j = ln(w_j·L / R_j) (decisions 026)
   const reserves = legs.map((l) => l[3]); // the state
-  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, minBuffer, gateMint, gateSwap, restructureBlock, lockStrike, seeded, dissolved, successor } = p;
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, minBuffer, gateMint, gateSwap, restructureBlock, lockStrike, seeded, gen } = p;
   const totalSupply = p.shares;
 
   return {
@@ -180,8 +183,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     restructureBlock: Number(restructureBlock),
     lockStrike,
     seeded,
-    dissolved,
-    successor,
+    gen: Number(gen),
     totalSupply,
     reserves,
   };
@@ -371,18 +373,20 @@ export async function fPoolZapOut(
 }
 
 /**
- * Roll a dissolved pool's bundle into its successor (decisions 025), on the router under one
- * lock: burn `shares` of `fromPool` in place — the legs, the quote and any unpulled dividend come
- * back — buy through `toPool`'s own curve only what its ratio lacks, mint `dL` of it to `to`, and
- * refund the rest in kind. Quote the bundle does not cover is pulled from the payer, at most
- * `maxQuoteIn`; surplus base is refunded, never sold. Size `dL` with {@link fPoolPreviewRollIn}.
- * The router must be the caller's ERC-6909 operator ({@link approveRouterForFPool}).
+ * Roll a retired generation's bundle into the pool's live one (decisions 025, 032), on the
+ * router under one lock: redeem `shares` of generation `gen` in place — the legs, the quote and
+ * any unpulled dividend come back — buy through the pool's own curve only what the live
+ * generation's ratio lacks, mint `dL` of it to `to`, and refund the rest in kind. Quote the
+ * bundle does not cover is pulled from the payer, at most `maxQuoteIn`; surplus base is
+ * refunded, never sold. Size `dL` with {@link fPoolPreviewRollIn}. The router must be the
+ * caller's ERC-6909 operator ({@link approveRouterForFPool}).
  */
 export async function fPoolRollIn(
   c: LogswapClient,
   a: {
-    fromPool: Hex;
-    toPool: Hex;
+    poolId: Hex;
+    /** the retired generation whose shares roll */
+    gen: bigint | number;
     shares: bigint;
     dL: bigint;
     maxQuoteIn?: bigint;
@@ -396,22 +400,23 @@ export async function fPoolRollIn(
   return writeRouter(
     c,
     "rollIn",
-    [a.fromPool, a.toPool, a.shares, a.dL, a.maxQuoteIn ?? 0n, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
+    [a.poolId, BigInt(a.gen), a.shares, a.dL, a.maxQuoteIn ?? 0n, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
     a.account,
   );
 }
 
 /**
- * The roll `holder`'s `shares` of `fromPool` fund into `toPool` WITHOUT a trade: the largest `dL`
- * the bundle's base covers on every successor leg, and the quote the bundle is short of (pass it
- * as `maxQuoteIn`) or over (refunded — the up direction's distribution) at that `dL`. A
- * successor leg the bundle does not hold makes `dL` zero: such a roll must buy, so size it below
- * with `previewZapIn` in mind.
+ * The roll `holder`'s `shares` of retired generation `gen` fund into the live one WITHOUT a
+ * trade: the largest `dL` the bundle's base covers on every leg, and the quote the bundle is
+ * short of (pass it as `maxQuoteIn`) or over (refunded — the up direction's distribution) at
+ * that `dL`. A leg the live generation admitted since makes `dL` zero: such a roll must buy, so
+ * size it below with `previewZapIn` in mind. Zero for the live generation, or before the next
+ * seed.
  */
 export async function fPoolPreviewRollIn(
   c: LogswapClient,
-  fromPool: Hex,
-  toPool: Hex,
+  poolId: Hex,
+  gen: bigint | number,
   holder: Address,
   shares: bigint,
 ): Promise<{ dL: bigint; quoteShort: bigint; quoteExcess: bigint }> {
@@ -420,7 +425,7 @@ export async function fPoolPreviewRollIn(
     address: c.addresses.lens,
     abi: logswapLensAbi,
     functionName: "previewRollIn",
-    args: [fromPool, toPool, holder, shares],
+    args: [poolId, BigInt(gen), holder, shares],
   } as never)) as readonly [bigint, bigint, bigint];
   return { dL, quoteShort, quoteExcess };
 }
@@ -438,18 +443,24 @@ export async function fPoolHarvest(c: LogswapClient, a: { poolId: Hex; amount: b
   return writeFPool(c, a.poolId, "harvest", [a.amount, a.to ?? a.account], a.account);
 }
 
-/** Pull one's settled dividend (decisions 028) without moving shares; anyone with shares. */
-export async function fPoolClaim(c: LogswapClient, a: { poolId: Hex; to?: Address; account: Address }) {
-  return writeFPool(c, a.poolId, "claim", [a.to ?? a.account], a.account);
+/**
+ * Pull one's settled dividend (decisions 028) on a generation's shares without moving them;
+ * anyone with shares. `gen` defaults to the live generation; a retired generation's harvests
+ * stay claimable under its own id (decisions 032).
+ */
+export async function fPoolClaim(c: LogswapClient, a: { poolId: Hex; gen?: bigint | number; to?: Address; account: Address }) {
+  const gen = a.gen ?? (await fPoolGen(c, a.poolId));
+  return writeFPool(c, a.poolId, "claim", [BigInt(gen), a.to ?? a.account], a.account);
 }
 
-/** A holder's dividend as of now — banked plus pending on the current balance (decisions 028). */
-export async function fPoolDividendOf(c: LogswapClient, poolId: Hex, holder: Address): Promise<bigint> {
+/** A holder's dividend as of now on generation `gen` (the live one by default) — banked plus pending on the current balance (decisions 028). */
+export async function fPoolDividendOf(c: LogswapClient, poolId: Hex, holder: Address, gen?: bigint | number): Promise<bigint> {
+  const g = gen ?? (await fPoolGen(c, poolId));
   return c.public.readContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
     functionName: "dividendOf",
-    args: [poolId, holder],
+    args: [poolId, BigInt(g), holder],
   } as never) as Promise<bigint>;
 }
 
@@ -598,9 +609,29 @@ export async function approveRouterForFPool(c: LogswapClient, account: Address) 
 // than read from the chain: it is pure, and a client that has to call to learn an id cannot build
 // a multicall that uses it.
 
-/** The ERC-6909 id carrying a pool's shares. Bit 255 set. */
-export function fPoolShareId(poolId: Hex): bigint {
-  return (1n << 255n) | (BigInt(poolId) >> 1n);
+/**
+ * The ERC-6909 id carrying generation `gen` of a pool's shares (decisions 032): bit 255 set (the
+ * share flag), the pool id's top 239 bits, the generation in the low 16. Each generation's shares
+ * are their own asset — a retired one is a claim on its bundle, the live one on the pool.
+ */
+export function fPoolShareId(poolId: Hex, gen: bigint | number = 0n): bigint {
+  return (1n << 255n) | ((BigInt(poolId) >> 17n) << 16n) | BigInt(gen);
+}
+
+/** The generation a share id carries — its low 16 bits. */
+export function fPoolGenOfShareId(id: bigint): number {
+  return Number(id & 0xffffn);
+}
+
+/** The pool's live generation, one read. */
+export async function fPoolGen(c: LogswapClient, poolId: Hex): Promise<number> {
+  const p = (await c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "getPool",
+    args: [poolId],
+  } as never)) as { gen: number };
+  return Number(p.gen);
 }
 
 /** The ERC-6909 id carrying claims on a token. Bit 255 clear, so it can never meet a share id. */
@@ -608,13 +639,63 @@ export function fPoolClaimId(token: Address): bigint {
   return BigInt(token);
 }
 
-export async function fPoolShareBalance(c: LogswapClient, poolId: Hex, owner: Address): Promise<bigint> {
+/** A holder's shares of generation `gen` — the live one by default. */
+export async function fPoolShareBalance(c: LogswapClient, poolId: Hex, owner: Address, gen?: bigint | number): Promise<bigint> {
+  const g = gen ?? (await fPoolGen(c, poolId));
   return c.public.readContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
     functionName: "balanceOf",
-    args: [owner, fPoolShareId(poolId)],
+    args: [owner, fPoolShareId(poolId, g)],
   } as never) as Promise<bigint>;
+}
+
+/** A retired generation's bundle (decisions 032): what is left to redeem — supply, quote, base per leg index. */
+export async function fPoolBundleOf(
+  c: LogswapClient,
+  poolId: Hex,
+  gen: bigint | number,
+): Promise<{ supply: bigint; quote: bigint; base: bigint[] }> {
+  const [supply, quote, base] = (await c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "bundleOf",
+    args: [poolId, BigInt(gen)],
+  } as never)) as readonly [bigint, bigint, readonly bigint[]];
+  return { supply, quote, base: [...base] };
+}
+
+/** A holder's claim on one retired generation, as the lens reports it: what `redeem` pays now. */
+export interface FPoolClaimRow {
+  gen: number;
+  shares: bigint;
+  base: bigint[];
+  quote: bigint;
+  dividend: bigint;
+}
+
+/** A holder's claims on a pool's retired generations — one row per generation still held (decisions 032). */
+export async function fPoolClaimsOf(c: LogswapClient, poolId: Hex, owner: Address): Promise<FPoolClaimRow[]> {
+  const { logswapLensAbi } = await import("./generated.js");
+  const rows = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "fClaimsOf",
+    args: [poolId, owner],
+  } as never)) as readonly { gen: bigint; shares: bigint; base: readonly bigint[]; quote: bigint; dividend: bigint }[];
+  return rows.map((r) => ({ gen: Number(r.gen), shares: r.shares, base: [...r.base], quote: r.quote, dividend: r.dividend }));
+}
+
+/**
+ * Redeem `shares` of a RETIRED generation (decisions 032): its bundle, pro rata — the base per
+ * leg and the quote — plus the owner's settled dividend. Not `burn`: nothing can move a bundle's
+ * ratio, so there is no slippage to bound. The owner, or an operator of theirs.
+ */
+export async function fPoolRedeem(
+  c: LogswapClient,
+  a: { poolId: Hex; gen: bigint | number; shares: bigint; owner?: Address; account: Address },
+) {
+  return writeFPool(c, a.poolId, "redeem", [BigInt(a.gen), a.owner ?? a.account, a.shares], a.account);
 }
 
 export async function fPoolClaimBalance(c: LogswapClient, token: Address, owner: Address): Promise<bigint> {
@@ -796,51 +877,44 @@ export async function fPoolSeed(
 }
 
 /**
- * End of life (decisions 025). Allowed at Q ≤ L/1e9 on every pool — the market filled the ask —
- * and on a pool that is not strike-locked at any Q, provided `successor` names an initialized
- * pool of the same authority and quote: the relaunch. After it every share is a frozen in-kind
- * claim redeemed by `burn` (or rolled with {@link fPoolRollIn}), forever; the pool's `successor`
- * carries the lineage. Never a second dissolve on one pool: the successor is a NEW pool.
+ * Retire the live generation (decisions 025, 032). Allowed at Q ≤ L/1e9 on every pool — the
+ * market filled the ask — and on a pool that is not strike-locked at any Q. The live (S, Q, R_j)
+ * become a frozen bundle every share of this generation redeems ({@link fPoolRedeem}) or rolls
+ * ({@link fPoolRollIn}), forever; the pool is unseeded until the next {@link fPoolSeed}, which
+ * opens generation `gen + 1` under the same id, gates, lists and promises.
  */
-export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; successor?: Hex; account: Address }) {
-  return writeFPool(c, a.poolId, "dissolve", [a.successor ?? ZERO_SALT], a.account);
+export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; account: Address }) {
+  return writeFPool(c, a.poolId, "dissolve", [], a.account);
 }
 
 /**
- * The sponsor's relaunch as ONE transaction (decisions 025): `initialize` the successor key,
- * `dissolve` the old pool into it, `burn` the sponsor's own shares, `seed` the successor with what
- * came back — the manager's `multicall`, the sponsor as sender throughout. Gates, allowlist,
- * operator, floor guard and name are re-applied afterwards, or appended to `extra` pre-encoded
- * against {@link fPoolManagerAbi}. Returns the tx hash; the successor's id is {@link fPoolIdOf}
- * of `nextKey`.
+ * The sponsor's relaunch as ONE transaction (decisions 025, 032): `dissolve` the live generation,
+ * `redeem` the sponsor's own shares of it (when `shares` > 0), `seed` the next generation with
+ * what came back — the manager's `multicall`, the sponsor as sender throughout, the same pool.
+ * Gates, allowlist, operator, `minBuffer` and names carry over; anything else goes in `extra`,
+ * pre-encoded against {@link fPoolManagerAbi}. The seed names reserves (decisions 029): `r0`
+ * outright, or `x0` marks against the key's `weights`.
  */
 export async function fPoolRelaunch(
   c: LogswapClient,
   a: {
     poolId: Hex;
-    nextKey: Omit<FPoolCreateArgs, "account">;
-    /** the sponsor's old shares to burn — its whole balance, usually */
+    /** the sponsor's shares of the retiring generation to redeem inside the batch — its whole balance, usually; 0 to keep the claim */
     shares: bigint;
     L0: bigint;
     Q0: bigint;
-    r0: bigint[];
     extra?: Hex[];
     account: Address;
-  },
+  } & ({ r0: bigint[] } | { x0: bigint[]; weights: bigint[] }),
 ) {
-  const { bases, companions } = sortFPoolLegs(a.nextKey.bases, a.nextKey.weights);
-  const key = {
-    quote: a.nextKey.quote, bases, weights: companions[0]!, phi: a.nextKey.phi, lockStrike: a.nextKey.lockStrike,
-    authority: a.nextKey.authority, salt: a.nextKey.salt ?? ZERO_SALT,
-  };
-  const next = await fPoolIdOf(c, a.nextKey);
+  const gen = await fPoolGen(c, a.poolId);
+  const r0 = "r0" in a ? a.r0 : a.x0.map((x, j) => fPoolReserveAt((a.weights[j]! * a.L0) / WAD, x));
   const enc = (functionName: string, args: unknown[]) =>
     encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
   const calls: Hex[] = [
-    enc("initialize", [key]),
-    enc("dissolve", [a.poolId, next]),
-    enc("burn", [a.poolId, a.account, a.shares, 0n]),
-    enc("seed", [next, a.L0, a.r0, a.Q0]),
+    enc("dissolve", [a.poolId]),
+    ...(a.shares > 0n ? [enc("redeem", [a.poolId, BigInt(gen), a.account, a.shares])] : []),
+    enc("seed", [a.poolId, a.L0, r0, a.Q0]),
     ...(a.extra ?? []),
   ];
   return writeFPool0(c, "multicall", [calls], a.account);
@@ -962,14 +1036,15 @@ export async function fPoolAdmitLeg(
  */
 export async function fPoolTransferShares(
   c: LogswapClient,
-  a: { poolId: Hex; to: Address; shares: bigint; account: Address },
+  a: { poolId: Hex; to: Address; shares: bigint; account: Address; gen?: bigint | number },
 ) {
   const wallet = requireWallet(c);
+  const gen = a.gen ?? (await fPoolGen(c, a.poolId));
   const { request } = await c.public.simulateContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
     functionName: "transfer",
-    args: [a.to, fPoolShareId(a.poolId), a.shares],
+    args: [a.to, fPoolShareId(a.poolId, gen), a.shares],
     account: a.account,
   } as never);
   return wallet.writeContract(request as never);
@@ -1061,12 +1136,12 @@ export async function discoverFPools(
 export async function fPoolShareHolders(
   c: LogswapClient,
   poolIdHex: Hex,
-  opts: { fromBlock?: bigint } = {},
+  opts: { fromBlock?: bigint; gen?: bigint | number } = {},
 ): Promise<Array<{ holder: Address; shares: bigint }>> {
   type Ev = Extract<(typeof fPoolManagerAbi)[number], { type: "event"; name: "Transfer" }>;
   const ev = fPoolManagerAbi.find((x): x is Ev => x.type === "event" && x.name === "Transfer");
   if (!ev) throw new Error("logswap: 6909 Transfer event missing from the generated ABI");
-  const id = fPoolShareId(poolIdHex);
+  const id = fPoolShareId(poolIdHex, opts.gen ?? (await fPoolGen(c, poolIdHex)));
   const logs = await c.public.getLogs({
     address: c.addresses.fPoolManager!,
     event: ev,
@@ -1086,7 +1161,7 @@ export async function fPoolShareHolders(
     .sort((a, b) => (b.shares > a.shares ? 1 : -1));
 }
 
-/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, lockStrike, seeded, dissolved, successor, n, Q, L, shares, theta0, bigSigma, leverTheta). */
+/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, lockStrike, seeded, gen, n, Q, L, shares, theta0, bigSigma, leverTheta). */
 export async function getFPoolsRaw(c: LogswapClient, poolIds: Hex[]): Promise<readonly unknown[]> {
   const { logswapLensAbi } = await import("./generated.js");
   return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "getFPools", args: [poolIds] } as never)) as readonly unknown[];
