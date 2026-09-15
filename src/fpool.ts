@@ -23,8 +23,17 @@
  * `addresses.router`.
  */
 
-import { toFunctionSelector, type Address, type Hash, type Hex } from "viem";
-import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
+import { encodeFunctionData, toFunctionSelector, type Address, type Hash, type Hex } from "viem";
+import { fPoolManagerAbi as fPoolPrimitiveAbi, fPoolSponsorAbi, logswapRouterAbi } from "./generated.js";
+
+/**
+ * The F manager's ABI is the UNION of its two compiled halves (decisions 031): `FPoolManager`
+ * holds the primitive and forwards every other selector from its fallback to `FPoolSponsor` —
+ * the lever, `claim`, `dissolve`, the handover, the gates, the desk, the names — by delegatecall.
+ * One address from outside, so one ABI here; both halves carry the base's events and errors,
+ * and viem tolerates the duplicates.
+ */
+export const fPoolManagerAbi = [...fPoolPrimitiveAbi, ...fPoolSponsorAbi] as const;
 import type { LogswapClient } from "./client.js";
 
 const WAD = 10n ** 18n;
@@ -70,12 +79,18 @@ export interface FPoolState {
   gateSwap: boolean;
   /** The block of the last lever / composition action: no swap runs in it. */
   restructureBlock: number;
-  /** Whether harvest is bounded by θ ≤ θ₀ — income only, never the floor's backing. */
-  feesOnly: boolean;
+  /**
+   * The strike is locked (decisions 027, formerly `feesOnly`): `harvest` resets the floor to θ₀
+   * and never past it, so only income can leave; and the pool cannot be dissolved while it bids.
+   * The pad's promise. Pairs with a locked seed (shares at 0xdead) — the class is the two bits.
+   */
+  lockStrike: boolean;
   seeded: boolean;
   dissolved: boolean;
+  /** The pool this one dissolved into (decisions 025) — the relaunch's lineage; zero when none. */
+  successor: Hex;
   totalSupply: bigint;
-  /** Base holdings the state implies, `R_j = w_j·L·e^{−x_j}`. */
+  /** What the pool holds of each base — the STATE since decisions 026; the mark `x` is derived from it. */
   reserves: bigint[];
 }
 
@@ -97,7 +112,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     quote: Address;
     phi: bigint;
     authority: Address;
-    feesOnly: boolean;
+    lockStrike: boolean;
     seeded: boolean;
     dissolved: boolean;
     n: number;
@@ -115,6 +130,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     minBuffer: bigint;
     incomeTaken: bigint;
     name: Hex;
+    successor: Hex;
   }>("getPool", [poolId]);
 
   // A pool that was never created reads as an all-zero struct rather than reverting, so the
@@ -136,11 +152,9 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
 
   const bases = legs.map((l) => l[0]);
   const weights = legs.map((l) => l[1]);
-  const x = legs.map((l) => l[2]);
-  // the ISOLATION SHADOW, not the derived reserve: what this pool actually holds of the token.
-  // In a singleton the contract's balance backs many pools, so this is the only per-pool figure.
-  const reserves = legs.map((l) => l[3]);
-  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, minBuffer, gateMint, gateSwap, restructureBlock, feesOnly, seeded, dissolved } = p;
+  const x = legs.map((l) => l[2]); // derived by the manager: x_j = ln(w_j·L / R_j) (decisions 026)
+  const reserves = legs.map((l) => l[3]); // the state
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, minBuffer, gateMint, gateSwap, restructureBlock, lockStrike, seeded, dissolved, successor } = p;
   const totalSupply = p.shares;
 
   return {
@@ -164,9 +178,10 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     gateMint,
     gateSwap,
     restructureBlock: Number(restructureBlock),
-    feesOnly,
+    lockStrike,
     seeded,
     dissolved,
+    successor,
     totalSupply,
     reserves,
   };
@@ -355,15 +370,91 @@ export async function fPoolZapOut(
   );
 }
 
+/**
+ * Roll a dissolved pool's bundle into its successor (decisions 025), on the router under one
+ * lock: burn `shares` of `fromPool` in place — the legs, the quote and any unpulled dividend come
+ * back — buy through `toPool`'s own curve only what its ratio lacks, mint `dL` of it to `to`, and
+ * refund the rest in kind. Quote the bundle does not cover is pulled from the payer, at most
+ * `maxQuoteIn`; surplus base is refunded, never sold. Size `dL` with {@link fPoolPreviewRollIn}.
+ * The router must be the caller's ERC-6909 operator ({@link approveRouterForFPool}).
+ */
+export async function fPoolRollIn(
+  c: LogswapClient,
+  a: {
+    fromPool: Hex;
+    toPool: Hex;
+    shares: bigint;
+    dL: bigint;
+    maxQuoteIn?: bigint;
+    minShares?: bigint;
+    to?: Address;
+    account: Address;
+    deadline?: bigint;
+  },
+) {
+  const to = a.to ?? a.account;
+  return writeRouter(
+    c,
+    "rollIn",
+    [a.fromPool, a.toPool, a.shares, a.dL, a.maxQuoteIn ?? 0n, a.minShares ?? 0n, to, a.deadline ?? defaultDeadline()],
+    a.account,
+  );
+}
+
+/**
+ * The roll `holder`'s `shares` of `fromPool` fund into `toPool` WITHOUT a trade: the largest `dL`
+ * the bundle's base covers on every successor leg, and the quote the bundle is short of (pass it
+ * as `maxQuoteIn`) or over (refunded — the up direction's distribution) at that `dL`. A
+ * successor leg the bundle does not hold makes `dL` zero: such a roll must buy, so size it below
+ * with `previewZapIn` in mind.
+ */
+export async function fPoolPreviewRollIn(
+  c: LogswapClient,
+  fromPool: Hex,
+  toPool: Hex,
+  holder: Address,
+  shares: bigint,
+): Promise<{ dL: bigint; quoteShort: bigint; quoteExcess: bigint }> {
+  const { logswapLensAbi } = await import("./generated.js");
+  const [dL, quoteShort, quoteExcess] = (await c.public.readContract({
+    address: c.addresses.lens,
+    abi: logswapLensAbi,
+    functionName: "previewRollIn",
+    args: [fromPool, toPool, holder, shares],
+  } as never)) as readonly [bigint, bigint, bigint];
+  return { dL, quoteShort, quoteExcess };
+}
+
 // ─── the floor lever (authority only) ─────────────────────────────────────────
 
 /**
- * Remove quote, lifting θ — price-neutral, pro-rata, no base moves. Under `feesOnly` the lift
- * stops at θ₀, so the authority extracts income and never the proceeds backing the floor.
+ * Remove quote, lifting θ — price-neutral, no base moves, and since decisions 028 a DIVIDEND to
+ * every share: the amount goes into the pool's pot and each holder's slice is settled lazily on
+ * their next transfer, mint or burn, or pulled with {@link fPoolClaim}. The sponsor's own slice —
+ * its shares' and the locked seed's at 0xdead — is pushed to `to` at once. Under `lockStrike`
+ * the lift stops at θ₀ (income only); on every live pool it stops at `LEVER_FLOOR` (Q/L ≥ ln 1.25).
  */
 export async function fPoolHarvest(c: LogswapClient, a: { poolId: Hex; amount: bigint; to?: Address; account: Address }) {
   return writeFPool(c, a.poolId, "harvest", [a.amount, a.to ?? a.account], a.account);
 }
+
+/** Pull one's settled dividend (decisions 028) without moving shares; anyone with shares. */
+export async function fPoolClaim(c: LogswapClient, a: { poolId: Hex; to?: Address; account: Address }) {
+  return writeFPool(c, a.poolId, "claim", [a.to ?? a.account], a.account);
+}
+
+/** A holder's dividend as of now — banked plus pending on the current balance (decisions 028). */
+export async function fPoolDividendOf(c: LogswapClient, poolId: Hex, holder: Address): Promise<bigint> {
+  return c.public.readContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName: "dividendOf",
+    args: [poolId, holder],
+  } as never) as Promise<bigint>;
+}
+
+/** The lever's floor: `harvest` may not take Q/L under ln 1.25 — the floor stays ≥ 20% below the mark (decisions 025). */
+export const LEVER_FLOOR = 223143551314209755n;
 
 /** Commit quote, deepening θ — the other sign of `harvest`, the same word as the C floor edit (decisions 011). The mark does not move: governance may write θ, never x. */
 export async function fPoolDeepen(c: LogswapClient, a: { poolId: Hex; amount: bigint; account: Address }) {
@@ -391,6 +482,19 @@ async function writeFPool(c: LogswapClient, poolId: Hex, functionName: string, a
     // one place all seven helpers share, is what keeps a caller from ever omitting it. The `as
     // never` casts blind tsc to arg counts, so this file's encode test is the real guard.
     args: [poolId, ...args],
+    account,
+  } as never);
+  return wallet.writeContract(request as never);
+}
+
+/** A manager write that is NOT keyed by a poolId — `multicall`. */
+async function writeFPool0(c: LogswapClient, functionName: string, args: unknown[], account: Address) {
+  const wallet = requireWallet(c);
+  const { request } = await c.public.simulateContract({
+    address: c.addresses.fPoolManager!,
+    abi: fPoolManagerAbi,
+    functionName,
+    args,
     account,
   } as never);
   return wallet.writeContract(request as never);
@@ -599,8 +703,8 @@ export interface FPoolCreateArgs {
   weights: bigint[];
   /** Fixed fee, WAD. The base-for-base fee is pinned at 2φ on-chain. */
   phi: bigint;
-  /** true: the authority's harvest stops at the seed strike θ₀ (the launch posture). */
-  feesOnly: boolean;
+  /** true: the strike is locked — harvest stops at θ₀ and the pool cannot be dissolved live (the pad's posture; decisions 027). */
+  lockStrike: boolean;
   authority: Address;
   /**
    * The differentiator, and nothing else. Identity is the key's hash, so one sponsor cannot run
@@ -640,7 +744,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
   const sum = a.weights.reduce((x, y) => x + y, 0n);
   if (sum !== 10n ** 18n) throw new Error(`logswap: weights sum to ${sum}, expected 1e18`);
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, lockStrike: a.lockStrike, authority: a.authority, salt: a.salt ?? ZERO_SALT };
   const wallet = requireWallet(c);
   const { request } = await c.public.simulateContract({
     address: c.addresses.fPoolManager!,
@@ -655,7 +759,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
 /** The pool id is the key's hash — pure, so it can be read before or after creation. */
 export async function fPoolIdOf(c: LogswapClient, a: Omit<FPoolCreateArgs, "account">): Promise<Hex> {
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, feesOnly: a.feesOnly, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, lockStrike: a.lockStrike, authority: a.authority, salt: a.salt ?? ZERO_SALT };
   return c.public.readContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
@@ -665,20 +769,81 @@ export async function fPoolIdOf(c: LogswapClient, a: Omit<FPoolCreateArgs, "acco
 }
 
 /**
- * Arm the pool: deposit the full basket at marks `x0` plus `Q0` of quote. Authority-only on-chain
- * (an open seed lets anyone front-run the creator for the strike). `x0` must align with the
- * SORTED bases — use {@link sortFPoolLegs} on (bases, weights, x0) together when building forms.
+ * The reserve a leg holds at a mark: `R = Lj·e^{−x}`, WAD math. The seed names RESERVES since
+ * decisions 029 — the sponsor states holdings and the price follows, `p = Lj / R` — so this is
+ * the one conversion from a price to what the pool will hold, done here, on the way in. Float
+ * precision (~1e-16 relative) is what a seed needs: any reserve is a legal seed, and the mark
+ * the pool derives from it is the one the sponsor meant to within that.
+ */
+export function fPoolReserveAt(Lj: bigint, x: bigint): bigint {
+  const e = Math.exp(-Number(x) / 1e18);
+  return (Lj * BigInt(Math.round(e * 1e18))) / 10n ** 18n;
+}
+
+/**
+ * Arm the pool: deposit `r0[j]` of each base plus `Q0` of quote against exposure `L0`. Pass either
+ * the reserves outright (`r0`) or the marks the pool should open at (`x0`, converted here with
+ * {@link fPoolReserveAt} against the key's weights). Authority-only on-chain (an open seed lets
+ * anyone front-run the creator for the strike). Arrays align with the SORTED bases — use
+ * {@link sortFPoolLegs} on (bases, weights, x0) together when building forms.
  */
 export async function fPoolSeed(
   c: LogswapClient,
-  a: { poolId: Hex; L0: bigint; x0: bigint[]; Q0: bigint; account: Address },
+  a: { poolId: Hex; L0: bigint; Q0: bigint; account: Address } & ({ r0: bigint[] } | { x0: bigint[]; weights: bigint[] }),
 ) {
-  return writeFPool(c, a.poolId, "seed", [a.L0, a.x0, a.Q0], a.account);
+  const r0 = "r0" in a ? a.r0 : a.x0.map((x, j) => fPoolReserveAt((a.weights[j]! * a.L0) / 10n ** 18n, x));
+  return writeFPool(c, a.poolId, "seed", [a.L0, r0, a.Q0], a.account);
 }
 
-/** End of life. Gated on-chain to the authority and to Q at dust (the raise is not abortable). */
-export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; account: Address }) {
-  return writeFPool(c, a.poolId, "dissolve", [], a.account);
+/**
+ * End of life (decisions 025). Allowed at Q ≤ L/1e9 on every pool — the market filled the ask —
+ * and on a pool that is not strike-locked at any Q, provided `successor` names an initialized
+ * pool of the same authority and quote: the relaunch. After it every share is a frozen in-kind
+ * claim redeemed by `burn` (or rolled with {@link fPoolRollIn}), forever; the pool's `successor`
+ * carries the lineage. Never a second dissolve on one pool: the successor is a NEW pool.
+ */
+export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; successor?: Hex; account: Address }) {
+  return writeFPool(c, a.poolId, "dissolve", [a.successor ?? ZERO_SALT], a.account);
+}
+
+/**
+ * The sponsor's relaunch as ONE transaction (decisions 025): `initialize` the successor key,
+ * `dissolve` the old pool into it, `burn` the sponsor's own shares, `seed` the successor with what
+ * came back — the manager's `multicall`, the sponsor as sender throughout. Gates, allowlist,
+ * operator, floor guard and name are re-applied afterwards, or appended to `extra` pre-encoded
+ * against {@link fPoolManagerAbi}. Returns the tx hash; the successor's id is {@link fPoolIdOf}
+ * of `nextKey`.
+ */
+export async function fPoolRelaunch(
+  c: LogswapClient,
+  a: {
+    poolId: Hex;
+    nextKey: Omit<FPoolCreateArgs, "account">;
+    /** the sponsor's old shares to burn — its whole balance, usually */
+    shares: bigint;
+    L0: bigint;
+    Q0: bigint;
+    r0: bigint[];
+    extra?: Hex[];
+    account: Address;
+  },
+) {
+  const { bases, companions } = sortFPoolLegs(a.nextKey.bases, a.nextKey.weights);
+  const key = {
+    quote: a.nextKey.quote, bases, weights: companions[0]!, phi: a.nextKey.phi, lockStrike: a.nextKey.lockStrike,
+    authority: a.nextKey.authority, salt: a.nextKey.salt ?? ZERO_SALT,
+  };
+  const next = await fPoolIdOf(c, a.nextKey);
+  const enc = (functionName: string, args: unknown[]) =>
+    encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
+  const calls: Hex[] = [
+    enc("initialize", [key]),
+    enc("dissolve", [a.poolId, next]),
+    enc("burn", [a.poolId, a.account, a.shares, 0n]),
+    enc("seed", [next, a.L0, a.r0, a.Q0]),
+    ...(a.extra ?? []),
+  ];
+  return writeFPool0(c, "multicall", [calls], a.account);
 }
 
 /**
@@ -696,9 +861,6 @@ export async function fPoolAcceptAuthority(c: LogswapClient, a: { poolId: Hex; a
 }
 
 // ─── the sponsor's controls and the desk (contracts bd3dd87, decisions 021) ───────────────
-
-/** `setLegL`'s "keep the stored mark" sentinel — the only legal `x` for a live leg. */
-export const NO_X = -(2n ** 255n);
 
 /** Turn the mint / swap gates on or off (authority). `burn` is never gated. */
 export async function fPoolSetGates(
@@ -773,22 +935,24 @@ export async function fPoolRaiseMinBuffer(c: LogswapClient, a: { poolId: Hex; mi
 
 /**
  * Set leg `j`'s liquidity (operator, sole LP only): grow, shrink, retire (`newLj = 0`), or re-admit
- * a retired leg at a named mark `x`. For a live leg leave `x` undefined — its mark is the market's.
- * The base moves single-sidedly through the lock; shares adjust to hold the share value.
+ * a retired leg holding `r` of the base (decisions 029 — the price follows, `p = newLj / r`; use
+ * {@link fPoolReserveAt} from a mark). For a live leg leave `r` undefined — its price is the
+ * market's, the reserve scales with the liquidity. Base moves single-sidedly through the lock;
+ * shares adjust to hold the share value.
  */
 export async function fPoolSetLegL(
   c: LogswapClient,
-  a: { poolId: Hex; j: number; newLj: bigint; x?: bigint; account: Address },
+  a: { poolId: Hex; j: number; newLj: bigint; r?: bigint; account: Address },
 ) {
-  return writeFPool(c, a.poolId, "setLegL", [BigInt(a.j), a.newLj, a.x ?? NO_X], a.account);
+  return writeFPool(c, a.poolId, "setLegL", [BigInt(a.j), a.newLj, a.r ?? 0n], a.account);
 }
 
-/** Admit a base the pool has never held, at a named mark, with liquidity `Lj` (operator, sole LP only). */
+/** Admit a base the pool has never held: `R` of it against liquidity `Lj`, so at `p = Lj / R` (operator, sole LP only). */
 export async function fPoolAdmitLeg(
   c: LogswapClient,
-  a: { poolId: Hex; base: Address; Lj: bigint; x: bigint; account: Address },
+  a: { poolId: Hex; base: Address; Lj: bigint; R: bigint; account: Address },
 ) {
-  return writeFPool(c, a.poolId, "admitLeg", [a.base, a.Lj, a.x], a.account);
+  return writeFPool(c, a.poolId, "admitLeg", [a.base, a.Lj, a.R], a.account);
 }
 
 /**
@@ -819,7 +983,7 @@ export interface DiscoveredFPool {
   bases: Address[];
   weights: bigint[];
   phi: bigint;
-  feesOnly: boolean;
+  lockStrike: boolean;
   authority: Address;
   /** The block the pool was initialized in — its age, for annualising realized income. */
   block: bigint;
@@ -838,7 +1002,7 @@ export interface DiscoveredFPool {
 
 /**
  * Every F pool ever created, from `Initialize` logs alone. Possible only because the event
- * carries the full key preimage (bases, weights, phi, feesOnly) — the poolId is a hash and could
+ * carries the full key preimage (bases, weights, phi, lockStrike) — the poolId is a hash and could
  * never be inverted; contracts PR #17 exists for exactly this call.
  */
 export async function discoverFPools(
@@ -869,7 +1033,7 @@ export async function discoverFPools(
   return logs.map((l) => {
     const a = l.args as {
       poolId: Hex; quote: Address; authority: Address; bases: readonly Address[];
-      weights: readonly bigint[]; phi: bigint; feesOnly: boolean;
+      weights: readonly bigint[]; phi: bigint; lockStrike: boolean;
     };
     const q0 = q0Of.get(a.poolId.toLowerCase());
     return {
@@ -878,7 +1042,7 @@ export async function discoverFPools(
       bases: [...a.bases],
       weights: [...a.weights],
       phi: a.phi,
-      feesOnly: a.feesOnly,
+      lockStrike: a.lockStrike,
       authority: a.authority,
       block: l.blockNumber ?? 0n,
       seeded: q0 !== undefined,
@@ -922,7 +1086,7 @@ export async function fPoolShareHolders(
     .sort((a, b) => (b.shares > a.shares ? 1 : -1));
 }
 
-/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, feesOnly, seeded, dissolved, n, Q, L, shares, theta0, bigSigma, leverTheta). */
+/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, lockStrike, seeded, dissolved, successor, n, Q, L, shares, theta0, bigSigma, leverTheta). */
 export async function getFPoolsRaw(c: LogswapClient, poolIds: Hex[]): Promise<readonly unknown[]> {
   const { logswapLensAbi } = await import("./generated.js");
   return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "getFPools", args: [poolIds] } as never)) as readonly unknown[];
