@@ -73,9 +73,12 @@ export const EXPECTED_VERSION = 3n;
  */
 // 7 (2026-09-15): the reserves are the state and the marks derived, `lockStrike`, the dividend
 // harvest, the relaunch (`dissolve(poolId, successor)`, `rollIn`), the reserve-named seed, the
-// sponsor facet — decisions 025–031. A 5 or 6 deployment reads with this SDK but every F write
-// below `seed` / `dissolve` / `setLegL` / `admitLeg` has moved its signature.
-export const EXPECTED_F_VERSION = 7n;
+// sponsor facet — decisions 025–031.
+// 8 (2026-09-15): the relaunch is in place (decisions 032) — every share id carries the
+// generation (`fPoolShareId(poolId, gen)`), `dissolve(poolId)`, `redeem`, `claim` / `dividendOf`
+// / `rollIn` / `previewRollIn` take the generation, `Pool.gen` replaces `dissolved` and
+// `successor`. A 7 deployment's share ids do not even resolve with this SDK.
+export const EXPECTED_F_VERSION = 8n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
