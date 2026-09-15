@@ -29,7 +29,13 @@ import { initializeMarket } from "../src/pools.js";
 import {
   fPoolInitialize,
   fPoolSeed,
+  fPoolReserveAt,
   fPoolDissolve,
+  fPoolRelaunch,
+  fPoolClaim,
+  fPoolDividendOf,
+  fPoolRollIn,
+  fPoolPreviewRollIn,
   fPoolProposeAuthority,
   fPoolAcceptAuthority,
   fPoolSetGates,
@@ -84,14 +90,16 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, leverTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), feesOnly: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n,
+          bigSigma: 0n, authority: A(0xa), lockStrike: true, seeded: true, dissolved: false, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
           pendingAuthority: A(0), operator: A(0), minBuffer: 0n, gateMint: false, gateSwap: false,
-          restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}` };
+          restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}`, successor: `0x${"0".repeat(64)}` };
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
       if (q.functionName === "shareIdOf") return (1n << 255n) | (BigInt(POOL) >> 1n);
+      if (q.functionName === "idOf") return POOL;
+      if (q.functionName === "previewRollIn") return [10n ** 21n, 0n, 5n];
       // the edit tree reads the class (lens.unpack + positions) and previews (lens.previewUpdate)
       if (q.functionName === "unpack") return [POOL, -5n, 10n, true];
       if (q.functionName === "positions") return [10n ** 21n, 10n ** 21n, 0n, 0n];
@@ -233,11 +241,31 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(
       fPoolInitialize(c, {
         quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n],
-        phi: 10n ** 16n, feesOnly: true, authority: A(0xa), account: A(0xa),
+        phi: 10n ** 16n, lockStrike: true, authority: A(0xa), account: A(0xa),
       }),
     ).resolves.toBe(HASH);
-    await expect(fPoolSeed(c, { poolId: POOL, L0: 10n ** 21n, x0: [0n, 0n], Q0: 0n, account: A(0xa) })).resolves.toBe(HASH);
+    // the seed names reserves (decisions 029): outright, or from marks against the key's weights
+    await expect(fPoolSeed(c, { poolId: POOL, L0: 10n ** 21n, r0: [4n * 10n ** 20n, 6n * 10n ** 20n], Q0: 0n, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(
+      fPoolSeed(c, { poolId: POOL, L0: 10n ** 21n, x0: [0n, 0n], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], Q0: 0n, account: A(0xa) }),
+    ).resolves.toBe(HASH);
+    expect(fPoolReserveAt(10n ** 21n, 0n)).toBe(10n ** 21n);
+    expect(Number(fPoolReserveAt(10n ** 21n, 693147180559945309n)) / 5e20).toBeCloseTo(1, 12); // e^{-ln 2}, to float precision
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolDissolve(c, { poolId: POOL, successor: POOL, account: A(0xa) })).resolves.toBe(HASH);
+    // the relaunch: one multicall of initialize / dissolve / burn / seed (decisions 025)
+    await expect(
+      fPoolRelaunch(c, {
+        poolId: POOL,
+        nextKey: { quote: A(0xc), bases: [A(0xb)], weights: [10n ** 18n], phi: 10n ** 16n, lockStrike: false, authority: A(0xa) },
+        shares: 10n ** 21n, L0: 10n ** 21n, Q0: 0n, r0: [10n ** 21n], account: A(0xa),
+      }),
+    ).resolves.toBe(HASH);
+    // the dividend (decisions 028) and the roll (025)
+    await expect(fPoolClaim(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
+    await expect(fPoolDividendOf(c, POOL, A(0xb))).resolves.toBe(0n);
+    await expect(fPoolPreviewRollIn(c, POOL, POOL, A(0xb), 5n)).resolves.toEqual({ dL: 10n ** 21n, quoteShort: 0n, quoteExcess: 5n });
+    await expect(fPoolRollIn(c, { fromPool: POOL, toPool: POOL, shares: 5n, dL: 10n ** 21n, account: A(0xb) })).resolves.toBe(HASH);
     await expect(fPoolProposeAuthority(c, { poolId: POOL, next: A(0xb), account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAcceptAuthority(c, { poolId: POOL, account: A(0xb) })).resolves.toBe(HASH);
   });
@@ -248,8 +276,8 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolAppointOperator(c, { poolId: POOL, operator: A(0xd), account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolRaiseMinBuffer(c, { poolId: POOL, minBuffer: 223143551314209755n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSetLegL(c, { poolId: POOL, j: 1, newLj: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
-    await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, x: 0n, account: A(0xd) })).resolves.toBe(HASH);
-    await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, x: -(10n ** 18n), account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, r: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, R: 2n * 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
     await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("C market creation encodes", async () => {

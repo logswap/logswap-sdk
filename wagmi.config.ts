@@ -16,9 +16,12 @@ export default defineConfig({
   plugins: [
     foundry({
       project: "contracts",
+      // `npm run codegen` builds first; the plugin's own build pipes forge's output through
+      // execSync's 1 MB buffer, which the linter's notes overflow (ENOBUFS).
+      forge: { build: false },
       // The singleton stack plus BasketPool — the homogeneous-claims sibling deployed beside it.
       // Its zaps live in LogswapRouter (one router, one Permit2 spender), so no fifth entry.
-      include: ["CPoolManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "FPoolManager.sol/**"],
+      include: ["CPoolManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "FPoolManager.sol/**", "FPoolSponsor.sol/**"],
     }),
   ],
 });

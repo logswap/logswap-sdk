@@ -71,7 +71,11 @@ export const EXPECTED_VERSION = 3n;
  * passes it; when one lands, raise this constant in the same change, which is the discipline
  * `EXPECTED_VERSION` enforces mechanically and this one asks for.
  */
-export const EXPECTED_F_VERSION = 5n;
+// 7 (2026-09-15): the reserves are the state and the marks derived, `lockStrike`, the dividend
+// harvest, the relaunch (`dissolve(poolId, successor)`, `rollIn`), the reserve-named seed, the
+// sponsor facet — decisions 025–031. A 5 or 6 deployment reads with this SDK but every F write
+// below `seed` / `dissolve` / `setLegL` / `admitLeg` has moved its signature.
+export const EXPECTED_F_VERSION = 7n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");

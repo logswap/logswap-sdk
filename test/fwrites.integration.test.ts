@@ -199,13 +199,13 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
     const st = await getFPool(c, multi3);
     const shapeArgs = {
       quote: st.quote, bases: [st.bases[0]!], weights: [10n ** 18n],
-      phi: 10n ** 16n, feesOnly: true, authority: user,
+      phi: 10n ** 16n, lockStrike: true, authority: user,
     };
     // a fresh phi makes a fresh key/id even with the same legs
     shapeArgs.phi = 10n ** 16n + BigInt(Date.now() % 1000);
     await mined(await fPoolInitialize(c, { ...shapeArgs, account: user }));
     const id = await fPoolIdOf(c, shapeArgs);
-    await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * QUNIT, x0: [0n], Q0: 0n, account: user }));
+    await mined(await fPoolSeed(c, { poolId: id, L0: 1_000n * QUNIT, r0: [1_000n * QUNIT], Q0: 0n, account: user })); // w = 1, p = 1 (029: the seed names reserves)
     const got = await fPoolQuoteSwap(c, { poolId: id, kind: FPoolQuoteKind.QuoteIn, j: 0, amountIn: 10n * QUNIT });
     expect(got).toBeGreaterThan(0n);
     // two steps (decisions 020): a proposal moves nothing, and only the proposed address can accept
