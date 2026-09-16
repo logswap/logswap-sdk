@@ -59,7 +59,6 @@ import {
   fPoolMint,
   fPoolBurn,
   fPoolHarvest,
-  fPoolDeepen,
   fPoolZapIn,
   fPoolZapOut,
   fPoolQuoteSwap,
@@ -97,7 +96,7 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       // permit2.allowance returns the packed triple; getFPool's reads return pool-shaped values
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
-        return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, leverTheta: 0n,
+        return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, harvestedTheta: 0n,
           bigSigma: 0n, authority: A(0xa), lockStrike: true, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
@@ -227,10 +226,9 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolMint(c, { poolId: POOL, dL: 10n ** 18n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolBurn(c, { poolId: POOL, shares: 1n, account: A(0xa) })).resolves.toBe(HASH);
   });
-  it("the floor lever: harvest / deepen", async () => {
+  it("the floor lever: harvest (deepen is gone — decisions 034)", async () => {
     const { c } = fakeClient();
     await expect(fPoolHarvest(c, { poolId: POOL, amount: 1n, account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolDeepen(c, { poolId: POOL, amount: 1n, account: A(0xa) })).resolves.toBe(HASH);
   });
   it("zaps resolve the ROUTER's overloaded zapIn to the F arity", async () => {
     const { c } = fakeClient();

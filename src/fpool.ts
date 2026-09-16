@@ -128,7 +128,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     shares: bigint;
     theta0: bigint;
     bigSigma: bigint;
-    leverTheta: bigint;
+    harvestedTheta: bigint;
     pendingAuthority: Address;
     operator: Address;
     minBuffer: bigint;
@@ -466,11 +466,6 @@ export async function fPoolDividendOf(c: LogswapClient, poolId: Hex, holder: Add
 
 /** The lever's floor: `harvest` may not take Q/L under ln 1.25 — the floor stays ≥ 20% below the mark (decisions 025). */
 export const LEVER_FLOOR = 223143551314209755n;
-
-/** Commit quote, deepening θ — the other sign of `harvest`, the same word as the C floor edit (decisions 011). The mark does not move: governance may write θ, never x. */
-export async function fPoolDeepen(c: LogswapClient, a: { poolId: Hex; amount: bigint; account: Address }) {
-  return writeFPool(c, a.poolId, "deepen", [a.amount], a.account);
-}
 
 // ─── internals ────────────────────────────────────────────────────────────────
 
@@ -1263,7 +1258,7 @@ export async function fPoolShareHolders(
     .sort((a, b) => (b.shares > a.shares ? 1 : -1));
 }
 
-/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, lockStrike, seeded, gen, n, Q, L, shares, theta0, bigSigma, leverTheta). */
+/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, lockStrike, seeded, gen, n, Q, L, shares, theta0, bigSigma, harvestedTheta). */
 export async function getFPoolsRaw(c: LogswapClient, poolIds: Hex[]): Promise<readonly unknown[]> {
   const { logswapLensAbi } = await import("./generated.js");
   return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "getFPools", args: [poolIds] } as never)) as readonly unknown[];
