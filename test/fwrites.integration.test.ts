@@ -199,7 +199,7 @@ describe.skipIf(!live)("F lifecycle and discovery against the local deployment",
     const st = await getFPool(c, multi3);
     const shapeArgs = {
       quote: st.quote, bases: [st.bases[0]!], weights: [10n ** 18n],
-      phi: 10n ** 16n, lockStrike: true, authority: user,
+      phi: 10n ** 16n, kind: "pad", authority: user,
     };
     // a fresh phi makes a fresh key/id even with the same legs
     shapeArgs.phi = 10n ** 16n + BigInt(Date.now() % 1000);
