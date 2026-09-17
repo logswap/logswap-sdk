@@ -51,8 +51,9 @@ import {
   fPoolAppointOperator,
   fPoolEmptyingHarvests,
   fPoolRetire,
-  fPoolSetLegL,
-  fPoolAdmitLeg,
+  fPoolSetLegs,
+  fPoolAcceptOperator,
+  fPoolOperatorOf,
   fPoolTransferShares,
   fPoolSwapQuoteIn,
   fPoolSwapBaseIn,
@@ -101,7 +102,7 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
           bigSigma: 0n, authority: A(0xa), kind: 2, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
-          pendingAuthority: A(0), operator: A(0), gateMint: false, gateSwap: false,
+          pendingAuthority: A(0), operator: A(0), pendingOperator: A(0), gateMint: false, gateSwap: false,
           restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}` };
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
@@ -270,6 +271,10 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(
       fPoolRelaunch(c, { poolId: POOL, shares: 0n, L0: 10n ** 21n, Q0: 0n, x0: [0n], weights: [10n ** 18n], account: A(0xa) }),
     ).resolves.toBe(HASH);
+    // the reshaped relaunch (037): the next table rides between the redeem and the seed; a retired leg's r0 is 0
+    await expect(
+      fPoolRelaunch(c, { poolId: POOL, shares: 0n, L0: 10n ** 21n, Q0: 0n, legs: { weights: [0n, 10n ** 18n], newBases: [A(0xe)] }, x0: [0n, 0n], weights: [0n, 10n ** 18n], account: A(0xa) }),
+    ).resolves.toBe(HASH);
     // the harvests a relaunch sends first (035): the contract's arithmetic replayed. A stub
     // answering the five reads, per shape.
     const harvests = (pool: { Q: bigint; L: bigint; kind: number; incomeTaken: bigint }, feePerL: bigint, collector: Address) =>
@@ -335,7 +340,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     // a private pool: gate minting, list the creator, appoint them operator; an initialized pool
     // that a stranded launch left behind is not initialized again; `extra` rides last
     const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], kind: "private", initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [POOL, true] })], account: A(0xa) }));
-    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "appointOperator", "setHarvestFeeExempt"]);
+    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "setHarvestFeeExempt"]); // no self-appointment: the authority is the operator (037)
     expect(priv[1]!.args).toEqual([POOL, true, false]);
     expect(priv[2]!.args).toEqual([POOL, [A(0xa)], true]);
     // and sent: ONE manager write, the multicall (the fake logs its simulate and its send)
@@ -350,9 +355,12 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolSetGates(c, { poolId: POOL, gateMint: true, gateSwap: false, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSetAllowed(c, { poolId: POOL, who: [A(0xb), A(0xc)], allowed: true, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAppointOperator(c, { poolId: POOL, operator: A(0xd), account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolSetLegL(c, { poolId: POOL, j: 1, newLj: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
-    await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, r: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
-    await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, R: 2n * 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolAcceptOperator(c, { poolId: POOL, account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolSetLegs(c, { poolId: POOL, weights: [6n * 10n ** 17n, 0n, 4n * 10n ** 17n], newBases: [A(0xe)], account: A(0xd) })).resolves.toBe(HASH);
+    await expect(fPoolSetLegs(c, { poolId: POOL, weights: [10n ** 18n], account: A(0xd) })).resolves.toBe(HASH);
+    // who runs the pool: the operator, or the authority until one is appointed (037)
+    expect(fPoolOperatorOf({ authority: A(0xa), operator: A(0) })).toBe(A(0xa));
+    expect(fPoolOperatorOf({ authority: A(0xa), operator: A(0xd) })).toBe(A(0xd));
     await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolTransferShares(c, { poolId: POOL, to: A(0xdead), shares: 5n, gen: 0, account: A(0xa) })).resolves.toBe(HASH);
   });

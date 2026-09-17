@@ -83,8 +83,12 @@ export const EXPECTED_VERSION = 3n;
 // `dissolve` needs an empty bid on every pool (decisions 035); the key bit is the CLASS, `pad`
 // (036): `seed` mints a pad's shares to 0xdead, and the operator, the gates and the list are
 // refused on it — `fPoolLaunch` no longer transfers the seed itself.
+// 11 (2026-09-17): roles and entries (decisions 037) — the operator runs the pool (`harvest`,
+// `dissolve`, `setLegs`) and is the authority until appointed, two-step (`acceptOperator`,
+// `Pool.pendingOperator`); `setLegL`/`admitLeg` are gone, `setLegs` edits the next generation's
+// table while unseeded; `fPoolRelaunch` takes `legs`.
 // `getPool` decodes one field fewer, so a 9 deployment's struct no longer matches this SDK.
-export const EXPECTED_F_VERSION = 10n;
+export const EXPECTED_F_VERSION = 11n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");

@@ -63,12 +63,17 @@ export interface FPoolState {
   compositeX: bigint;
   /** Σ = ∫ Σ_j w_j (dx_j)², accrued even though the fee is fixed — the kernel stays calculable. */
   bigSigma: bigint;
-  /** Creator (private) or a governance contract (public). Holds the floor lever. */
+  /** The cold key (decisions 037): seeds the pool, hands it over, names it, gates it (private). A creator, a treasury, a governance contract. */
   authority: Address;
   /** The proposed next authority, until it accepts — zero when nothing is pending (decisions 020). */
   pendingAuthority: Address;
-  /** The desk's hot key (`ma-private.md` §6): may reshape composition, never move value out. Zero when none. */
+  /**
+   * The hot key that RUNS the pool (decisions 037): `harvest`, `dissolve`, `setLegs`. Zero means
+   * the authority itself — see {@link fPoolOperatorOf}. Appointed two-step on a private pool.
+   */
   operator: Address;
+  /** The proposed next operator, until it accepts — zero when nothing is pending. */
+  pendingOperator: Address;
   /** The sponsor's own label for this pool, mutable and never identity. "" when unnamed. */
   name: string;
   /** Only `allowed` accounts may receive minted shares. */
@@ -125,6 +130,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     harvestedTheta: bigint;
     pendingAuthority: Address;
     operator: Address;
+    pendingOperator: Address;
     incomeTaken: bigint;
     name: Hex;
   }>("getPool", [poolId]);
@@ -150,7 +156,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   const weights = legs.map((l) => l[1]);
   const x = legs.map((l) => l[2]); // derived by the manager: x_j = ln(w_j·L / R_j) (decisions 026)
   const reserves = legs.map((l) => l[3]); // the state
-  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, gateMint, gateSwap, restructureBlock, seeded, gen } = p;
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, pendingOperator, gateMint, gateSwap, restructureBlock, seeded, gen } = p;
   const totalSupply = p.shares;
 
   return {
@@ -169,6 +175,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     authority,
     pendingAuthority,
     operator,
+    pendingOperator,
     name: bytes32ToText(p.name),
     gateMint,
     gateSwap,
@@ -946,34 +953,40 @@ export async function fPoolEmptyingHarvests(c: LogswapClient, poolId: Hex): Prom
 }
 
 /**
- * The sponsor's relaunch as ONE transaction (decisions 025, 032, 035): `harvest` the bid out —
- * a dividend to every share, {@link fPoolEmptyingHarvests} — `dissolve` the live generation at
- * the empty bid, `redeem` the sponsor's own shares of it (when `shares` > 0), `seed` the next
- * generation with what came back — the manager's `multicall`, the sponsor as sender throughout,
- * the same pool. Gates, allowlist, operator and names carry over; anything else goes in `extra`,
- * pre-encoded against {@link fPoolManagerAbi}. The seed names reserves (decisions 029): `r0`
- * outright, or `x0` marks against the key's `weights`.
+ * The relaunch as ONE transaction (decisions 025, 032, 035, 037): `harvest` the bid out — a
+ * dividend to every share, {@link fPoolEmptyingHarvests} — `dissolve` the live generation at the
+ * empty bid, `redeem` the caller's own shares of it (when `shares` > 0), optionally `setLegs` the
+ * next generation's composition (`legs`: a private pool's reshape — retire, admit, reweight), and
+ * `seed` it with what came back — the manager's `multicall`, one sender throughout, the same
+ * pool. The operator's when one is appointed and the seed's inventory is its own; by default the
+ * authority's. Gates, allowlist and names carry over; anything else goes in `extra`, pre-encoded
+ * against {@link fPoolManagerAbi}. The seed names reserves (decisions 029): `r0` outright — one
+ * per leg of the NEXT table, 0 for a retired leg — or `x0` marks against the next table's
+ * `weights`.
  */
 export async function fPoolRelaunch(
   c: LogswapClient,
   a: {
     poolId: Hex;
-    /** the sponsor's shares of the retiring generation to redeem inside the batch — its whole balance, usually; 0 to keep the claim */
+    /** the caller's shares of the retiring generation to redeem inside the batch — its whole balance, usually; 0 to keep the claim */
     shares: bigint;
     L0: bigint;
     Q0: bigint;
+    /** the next generation's composition (decisions 037): one weight per existing leg (0 retires it), then one per new base */
+    legs?: { weights: bigint[]; newBases?: Address[] };
     extra?: Hex[];
     account: Address;
   } & ({ r0: bigint[] } | { x0: bigint[]; weights: bigint[] }),
 ) {
   const [gen, harvests] = await Promise.all([fPoolGen(c, a.poolId), fPoolEmptyingHarvests(c, a.poolId)]);
-  const r0 = "r0" in a ? a.r0 : a.x0.map((x, j) => fPoolReserveAt((a.weights[j]! * a.L0) / WAD, x));
+  const r0 = "r0" in a ? a.r0 : a.x0.map((x, j) => (a.weights[j]! === 0n ? 0n : fPoolReserveAt((a.weights[j]! * a.L0) / WAD, x)));
   const enc = (functionName: string, args: unknown[]) =>
     encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
   const calls: Hex[] = [
     ...harvests.map((amount) => enc("harvest", [a.poolId, amount, a.account])),
     enc("dissolve", [a.poolId]),
     ...(a.shares > 0n ? [enc("redeem", [a.poolId, BigInt(gen), a.account, a.shares])] : []),
+    ...(a.legs ? [enc("setLegs", [a.poolId, a.legs.weights, a.legs.newBases ?? []])] : []),
     enc("seed", [a.poolId, a.L0, r0, a.Q0]),
     ...(a.extra ?? []),
   ];
@@ -1040,10 +1053,10 @@ export function fPoolLaunchCalls(
   }
   if (a.name) calls.push(enc("setName", [poolId, textToBytes32(a.name)]));
   if (a.kind === "private") {
-    // the desk's opening posture: gated minting, the creator listed and appointed operator
+    // the desk's opening posture: gated minting, the creator listed. No appointment: the
+    // authority is the operator until one is appointed (decisions 037)
     calls.push(enc("setGates", [poolId, true, false]));
     calls.push(enc("setAllowed", [poolId, [a.account], true]));
-    calls.push(enc("appointOperator", [poolId, a.account]));
   }
   calls.push(...(a.extra ?? []));
   return calls;
@@ -1149,37 +1162,44 @@ export async function fPoolSponsorName(c: LogswapClient, who: Address): Promise<
   return bytes32ToText(word);
 }
 
-/** Appoint (or clear, with the zero address) the operator — the hot key that reshapes and never moves value out. */
+/** Who runs the pool (decisions 037): the appointed operator, or the authority until one is. */
+export function fPoolOperatorOf(s: Pick<FPoolState, "authority" | "operator">): Address {
+  return s.operator === ZERO_ADDRESS ? s.authority : s.operator;
+}
+
+/**
+ * Propose the operator (authority; private pools only) — the hot key that runs the pool: `harvest`,
+ * `dissolve`, `setLegs`. Two-step: the proposed address takes the role with
+ * {@link fPoolAcceptOperator}. The zero address clears at once — the role returns to the authority.
+ */
 export async function fPoolAppointOperator(c: LogswapClient, a: { poolId: Hex; operator: Address; account: Address }) {
   return writeFPool(c, a.poolId, "appointOperator", [a.operator], a.account);
 }
 
-/**
- * Set leg `j`'s liquidity (operator, sole LP only): grow, shrink, retire (`newLj = 0`), or re-admit
- * a retired leg holding `r` of the base (decisions 029 — the price follows, `p = newLj / r`; use
- * {@link fPoolReserveAt} from a mark). For a live leg leave `r` undefined — its price is the
- * market's, the reserve scales with the liquidity. Base moves single-sidedly through the lock;
- * shares adjust to hold the share value.
- */
-export async function fPoolSetLegL(
-  c: LogswapClient,
-  a: { poolId: Hex; j: number; newLj: bigint; r?: bigint; account: Address },
-) {
-  return writeFPool(c, a.poolId, "setLegL", [BigInt(a.j), a.newLj, a.r ?? 0n], a.account);
+/** The proposed operator takes the role. */
+export async function fPoolAcceptOperator(c: LogswapClient, a: { poolId: Hex; account: Address }) {
+  return writeFPool(c, a.poolId, "acceptOperator", [], a.account);
 }
 
-/** Admit a base the pool has never held: `R` of it against liquidity `Lj`, so at `p = Lj / R` (operator, sole LP only). */
-export async function fPoolAdmitLeg(
+/**
+ * The next generation's composition (operator; private pools only; ONLY while the pool is
+ * unseeded — between a dissolve and the seed that prices it, decisions 037). `weights` has one
+ * entry per leg the pool has ever had, in index order (0 retires a leg; indices are never reused),
+ * then one per base in `newBases`, appended; they sum to 1e18 exactly. No value moves: the
+ * following {@link fPoolSeed} names every reserve. A live reshape is {@link fPoolRelaunch} with
+ * `legs` set.
+ */
+export async function fPoolSetLegs(
   c: LogswapClient,
-  a: { poolId: Hex; base: Address; Lj: bigint; R: bigint; account: Address },
+  a: { poolId: Hex; weights: bigint[]; newBases?: Address[]; account: Address },
 ) {
-  return writeFPool(c, a.poolId, "admitLeg", [a.base, a.Lj, a.R], a.account);
+  return writeFPool(c, a.poolId, "setLegs", [a.weights, a.newBases ?? []], a.account);
 }
 
 /**
  * Move shares (ERC-6909 `transfer`) — to another holder, or to `0xdead` to lock them for good.
  * Burning to the dead address is a sponsor's way to make its liquidity permanent: the shares can
- * never be redeemed, and they never count against the sole-LP precondition.
+ * never be redeemed.
  */
 export async function fPoolTransferShares(
   c: LogswapClient,
