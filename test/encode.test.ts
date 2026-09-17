@@ -99,7 +99,7 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, harvestedTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), kind: 2, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
+          bigSigma: 0n, authority: A(0xa), kind: 3, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
           pendingAuthority: A(0), operator: A(0), pendingOperator: A(0), gateMint: false, gateSwap: false,
@@ -289,13 +289,13 @@ describe("every F write helper encodes against the generated ABI", () => {
         POOL,
       );
     const Q = 115n * 10n ** 18n, L = 10n ** 21n, f = (Q * 10n ** 18n) / L; // the devnet's KNRD pad: all of Q is income
-    await expect(harvests({ Q: 0n, L, kind: 2, incomeTaken: 0n }, 0n, A(0x1))).resolves.toEqual([]); // nothing to empty
-    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, f, A(0x1))).resolves.toEqual([Q]); // a collector: one harvest
+    await expect(harvests({ Q: 0n, L, kind: 3, incomeTaken: 0n }, 0n, A(0x1))).resolves.toEqual([]); // nothing to empty
+    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, f, A(0x1))).resolves.toEqual([Q]); // a collector: one harvest
     // no collector: the cut stays as LP quote and reads as taken income, so the second harvest is capital
-    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, f, A(0))).resolves.toEqual([Q, Q / 2n]);
-    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, 0n, A(0))).resolves.toEqual([Q]); // no income: no cut
-    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, f, A(0x1))).rejects.toThrow(/a pad is retired/);
-    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, 3n * f, A(0))).rejects.toThrow(/two harvests/); // income above Q, no collector
+    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, f, A(0))).resolves.toEqual([Q, Q / 2n]);
+    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, 0n, A(0))).resolves.toEqual([Q]); // no income: no cut
+    await expect(harvests({ Q, L, kind: 3, incomeTaken: 0n }, f, A(0x1))).rejects.toThrow(/a pad is retired/);
+    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, 3n * f, A(0))).rejects.toThrow(/two harvests/); // income above Q, no collector
     // the generation in the id (032): bit 255, the pool id's top 239 bits, gen in the low 16
     expect(fPoolShareId(POOL, 0) >> 255n).toBe(1n);
     expect(fPoolShareId(POOL, 3) & 0xffffn).toBe(3n);

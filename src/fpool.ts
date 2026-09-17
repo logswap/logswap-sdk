@@ -189,17 +189,19 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
 }
 
 /**
- * The kind of pool (decisions 036) — a ladder of rigidity, each rung dropping powers the one
- * below it has. `private`, the desk: every entry — gates, a list, an operator that reshapes the
- * legs, an unbounded harvest, the seed kept. `pol`, a treasury's public pool or a basket: no
+ * The kind of pool (decisions 036, 038). `public`: the protocol's own pool — born with the fee
+ * collector as its authority (which may hand it to a governance contract); no gates, no operator.
+ * `private`, the desk: every entry — gates, a list, an operator that reshapes the legs between
+ * generations, an unbounded harvest, the seed kept. `pol`, a treasury's pool or a basket: no
  * gates, no operator — composition and access fixed at birth; harvest unbounded, seed the
  * seeder's. `pad`, a launch: a POL whose harvest never lifts the floor above the seed floor and
- * whose seed the contract minted to 0xdead — one asset, open to all.
+ * whose seed the contract minted to 0xdead — one asset, open to all. private → pol → pad is the
+ * ladder of rigidity; public is a pol held by the protocol.
  */
-export type FPoolKind = "private" | "pol" | "pad";
-/** The key's enum values, in rigidity order. */
-export const F_KIND = { private: 0, pol: 1, pad: 2 } as const;
-const F_KIND_NAMES: readonly FPoolKind[] = ["private", "pol", "pad"];
+export type FPoolKind = "public" | "private" | "pol" | "pad";
+/** The key's enum values. */
+export const F_KIND = { public: 0, private: 1, pol: 2, pad: 3 } as const;
+const F_KIND_NAMES: readonly FPoolKind[] = ["public", "private", "pol", "pad"];
 export function fPoolKindOf(n: number | bigint): FPoolKind {
   const k = F_KIND_NAMES[Number(n)];
   if (!k) throw new Error(`logswap: unknown pool kind ${n}`);
