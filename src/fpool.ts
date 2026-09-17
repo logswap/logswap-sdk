@@ -77,14 +77,8 @@ export interface FPoolState {
   gateSwap: boolean;
   /** The block of the last harvest / composition action: no swap runs in it. */
   restructureBlock: number;
-  /**
-   * The class, one bit (decisions 036; `lockFloor` in 035, `lockStrike` from 027, `feesOnly`
-   * before). A PAD: `harvest` lifts the floor back to the seed floor θ₀ and never past it (income
-   * only); `seed` minted every share to 0xdead, so the float and the raise can never be burned
-   * out (the creator keeps the dead shares' dividend); no operator, no gate, no list — one asset,
-   * open to all. A pool without it (POL, basket, desk) has every entry.
-   */
-  pad: boolean;
+  /** The rung — see {@link FPoolKind}. */
+  kind: FPoolKind;
   /** False before the first seed — and between a dissolve and the next one (decisions 032). */
   seeded: boolean;
   /**
@@ -116,7 +110,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     quote: Address;
     phi: bigint;
     authority: Address;
-    pad: boolean;
+    kind: number;
     seeded: boolean;
     gen: number;
     n: number;
@@ -156,7 +150,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   const weights = legs.map((l) => l[1]);
   const x = legs.map((l) => l[2]); // derived by the manager: x_j = ln(w_j·L / R_j) (decisions 026)
   const reserves = legs.map((l) => l[3]); // the state
-  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, gateMint, gateSwap, restructureBlock, pad, seeded, gen } = p;
+  const { quote, Q, L, phi, theta0, bigSigma, authority, pendingAuthority, operator, gateMint, gateSwap, restructureBlock, seeded, gen } = p;
   const totalSupply = p.shares;
 
   return {
@@ -179,7 +173,7 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
     gateMint,
     gateSwap,
     restructureBlock: Number(restructureBlock),
-    pad,
+    kind: fPoolKindOf(p.kind),
     seeded,
     gen: Number(gen),
     totalSupply,
@@ -187,7 +181,25 @@ export async function getFPool(c: LogswapClient, poolId: Hex): Promise<FPoolStat
   };
 }
 
-/** Which of the two products a pool is configured as. A UI has to choose what to render. */
+/**
+ * The kind of pool (decisions 036) — a ladder of rigidity, each rung dropping powers the one
+ * below it has. `private`, the desk: every entry — gates, a list, an operator that reshapes the
+ * legs, an unbounded harvest, the seed kept. `pol`, a treasury's public pool or a basket: no
+ * gates, no operator — composition and access fixed at birth; harvest unbounded, seed the
+ * seeder's. `pad`, a launch: a POL whose harvest never lifts the floor above the seed floor and
+ * whose seed the contract minted to 0xdead — one asset, open to all.
+ */
+export type FPoolKind = "private" | "pol" | "pad";
+/** The key's enum values, in rigidity order. */
+export const F_KIND = { private: 0, pol: 1, pad: 2 } as const;
+const F_KIND_NAMES: readonly FPoolKind[] = ["private", "pol", "pad"];
+export function fPoolKindOf(n: number | bigint): FPoolKind {
+  const k = F_KIND_NAMES[Number(n)];
+  if (!k) throw new Error(`logswap: unknown pool kind ${n}`);
+  return k;
+}
+
+/** Which of the two products a pool is configured as — a pad is a launch, anything else a basket/pool. A UI has to choose what to render. */
 export type FPoolShape = "launch" | "basket";
 
 export interface FPoolDescription {
@@ -216,7 +228,7 @@ export async function describeFPool(c: LogswapClient, s: FPoolState): Promise<FP
     ? await Promise.all([rd<bigint>("feePerL"), rd<bigint>("edgePerL")])
     : [0n, 0n];
   return {
-    shape: s.bases.length === 1 ? "launch" : "basket",
+    shape: s.kind === "pad" ? "launch" : "basket", // the kind, not n = 1 (decisions 036)
     legs: s.bases.length,
     atFloor: s.Q === 0n,
     feePerL,
@@ -775,8 +787,8 @@ export interface FPoolCreateArgs {
   weights: bigint[];
   /** Fixed fee, WAD. The base-for-base fee is pinned at 2φ on-chain. */
   phi: bigint;
-  /** true: the strike is locked — harvest stops at θ₀ and the pool cannot be dissolved live (the pad's posture; decisions 027). */
-  pad: boolean;
+  /** The rung (decisions 036) — see {@link FPoolKind}. In the key: the pool's identity, never changed after. */
+  kind: FPoolKind;
   authority: Address;
   /**
    * The differentiator, and nothing else. Identity is the key's hash, so one sponsor cannot run
@@ -816,7 +828,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
   const sum = a.weights.reduce((x, y) => x + y, 0n);
   if (sum !== 10n ** 18n) throw new Error(`logswap: weights sum to ${sum}, expected 1e18`);
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, pad: a.pad, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, kind: F_KIND[a.kind], authority: a.authority, salt: a.salt ?? ZERO_SALT };
   const wallet = requireWallet(c);
   const { request } = await c.public.simulateContract({
     address: c.addresses.fPoolManager!,
@@ -831,7 +843,7 @@ export async function fPoolInitialize(c: LogswapClient, a: FPoolCreateArgs) {
 /** The pool id is the key's hash — pure, so it can be read before or after creation. */
 export async function fPoolIdOf(c: LogswapClient, a: Omit<FPoolCreateArgs, "account">): Promise<Hex> {
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, pad: a.pad, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, kind: F_KIND[a.kind], authority: a.authority, salt: a.salt ?? ZERO_SALT };
   return c.public.readContract({
     address: c.addresses.fPoolManager!,
     abi: fPoolManagerAbi,
@@ -907,14 +919,14 @@ export async function fPoolEmptyingHarvests(c: LogswapClient, poolId: Hex): Prom
   const rd = <T>(functionName: string, args: readonly unknown[] = []) =>
     c.public.readContract({ address: c.addresses.fPoolManager!, abi: fPoolManagerAbi, functionName, args } as never) as Promise<T>;
   const [p, feePerL, fee, exempt, collector] = await Promise.all([
-    rd<{ Q: bigint; L: bigint; pad: boolean; incomeTaken: bigint }>("getPool", [poolId]),
+    rd<{ Q: bigint; L: bigint; kind: number; incomeTaken: bigint }>("getPool", [poolId]),
     rd<bigint>("feePerL", [poolId]),
     rd<bigint>("HARVEST_FEE"),
     rd<boolean>("harvestFeeExempt", [poolId]),
     rd<Address>("feeCollector"),
   ]);
   if (p.Q === 0n) return [];
-  if (p.pad) throw new Error("logswap: a pad is retired only once its bid is empty (decisions 035)");
+  if (p.kind === F_KIND.pad) throw new Error("logswap: a pad is retired only once its bid is empty (decisions 035)");
   const earned = feePerL > 0n ? (feePerL * p.L) / WAD : 0n;
   let taken = p.incomeTaken;
   let q = p.Q;
@@ -987,8 +999,6 @@ export interface FPoolLaunchArgs extends Omit<FPoolCreateArgs, "account"> {
   openBuy?: { j: number; amountIn: bigint; minOut?: bigint };
   /** The pool's label, set in the batch (≤ 31 bytes of UTF-8). */
   name?: string;
-  /** Gate minting, list the creator, appoint them operator (decisions 021) — three calls, in the batch. */
-  privatePool?: boolean;
   /**
    * The pool already exists (a previous launch got as far as `initialize` and no further — a seed
    * that reverted, a closed tab, before the launch was one transaction), so `initialize` is left
@@ -1015,7 +1025,7 @@ export function fPoolLaunchCalls(
   const given = "r0" in a ? a.r0 : a.x0.map((x, j) => fPoolReserveAt((a.weights[j]! * a.L0) / WAD, x));
   if (given.length !== a.bases.length) throw new Error(`logswap: ${given.length} reserves for ${a.bases.length} legs`);
   const { bases, companions } = sortFPoolLegs(a.bases, a.weights, given);
-  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, pad: a.pad, authority: a.authority, salt: a.salt ?? ZERO_SALT };
+  const key = { quote: a.quote, bases, weights: companions[0]!, phi: a.phi, kind: F_KIND[a.kind], authority: a.authority, salt: a.salt ?? ZERO_SALT };
   const enc = (functionName: string, args: unknown[]) =>
     encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
   const calls: Hex[] = [];
@@ -1029,7 +1039,8 @@ export function fPoolLaunchCalls(
     calls.push(enc("swapQuoteIn", [poolId, BigInt(j), a.openBuy.amountIn, a.openBuy.minOut ?? 0n, a.account]));
   }
   if (a.name) calls.push(enc("setName", [poolId, textToBytes32(a.name)]));
-  if (a.privatePool) {
+  if (a.kind === "private") {
+    // the desk's opening posture: gated minting, the creator listed and appointed operator
     calls.push(enc("setGates", [poolId, true, false]));
     calls.push(enc("setAllowed", [poolId, [a.account], true]));
     calls.push(enc("appointOperator", [poolId, a.account]));
@@ -1194,7 +1205,7 @@ export interface DiscoveredFPool {
   bases: Address[];
   weights: bigint[];
   phi: bigint;
-  pad: boolean;
+  kind: FPoolKind;
   authority: Address;
   /** The block the pool was initialized in — its age, for annualising realized income. */
   block: bigint;
@@ -1244,7 +1255,7 @@ export async function discoverFPools(
   return logs.map((l) => {
     const a = l.args as {
       poolId: Hex; quote: Address; authority: Address; bases: readonly Address[];
-      weights: readonly bigint[]; phi: bigint; pad: boolean;
+      weights: readonly bigint[]; phi: bigint; kind: number;
     };
     const q0 = q0Of.get(a.poolId.toLowerCase());
     return {
@@ -1253,12 +1264,12 @@ export async function discoverFPools(
       bases: [...a.bases],
       weights: [...a.weights],
       phi: a.phi,
-      pad: a.pad,
+      kind: fPoolKindOf(a.kind),
       authority: a.authority,
       block: l.blockNumber ?? 0n,
       seeded: q0 !== undefined,
       q0: q0 ?? 0n,
-      shape: a.bases.length === 1 && (q0 ?? 0n) === 0n ? "launch" : "basket",
+      shape: a.kind === F_KIND.pad ? "launch" : "basket", // the kind, not n = 1: a mono POL is a pool (decisions 036)
     };
   });
 }
@@ -1297,7 +1308,7 @@ export async function fPoolShareHolders(
     .sort((a, b) => (b.shares > a.shares ? 1 : -1));
 }
 
-/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, pad, seeded, gen, n, Q, L, shares, theta0, bigSigma, harvestedTheta). */
+/** Every F pool's state in one lens call (the raw manager struct: quote, phi, authority, kind, seeded, gen, n, Q, L, shares, theta0, bigSigma, harvestedTheta). */
 export async function getFPoolsRaw(c: LogswapClient, poolIds: Hex[]): Promise<readonly unknown[]> {
   const { logswapLensAbi } = await import("./generated.js");
   return (await c.public.readContract({ address: c.addresses.lens, abi: logswapLensAbi, functionName: "getFPools", args: [poolIds] } as never)) as readonly unknown[];

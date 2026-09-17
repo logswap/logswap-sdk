@@ -98,7 +98,7 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, harvestedTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), pad: true, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
+          bigSigma: 0n, authority: A(0xa), kind: 2, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
           pendingAuthority: A(0), operator: A(0), gateMint: false, gateSwap: false,
@@ -250,7 +250,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(
       fPoolInitialize(c, {
         quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n],
-        phi: 10n ** 16n, pad: true, authority: A(0xa), account: A(0xa),
+        phi: 10n ** 16n, kind: "pad", authority: A(0xa), account: A(0xa),
       }),
     ).resolves.toBe(HASH);
     // the seed names reserves (decisions 029): outright, or from marks against the key's weights
@@ -272,7 +272,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     ).resolves.toBe(HASH);
     // the harvests a relaunch sends first (035): the contract's arithmetic replayed. A stub
     // answering the five reads, per shape.
-    const harvests = (pool: { Q: bigint; L: bigint; pad: boolean; incomeTaken: bigint }, feePerL: bigint, collector: Address) =>
+    const harvests = (pool: { Q: bigint; L: bigint; kind: number; incomeTaken: bigint }, feePerL: bigint, collector: Address) =>
       fPoolEmptyingHarvests(
         {
           addresses: { fPoolManager: A(0xf) },
@@ -284,13 +284,13 @@ describe("every F write helper encodes against the generated ABI", () => {
         POOL,
       );
     const Q = 115n * 10n ** 18n, L = 10n ** 21n, f = (Q * 10n ** 18n) / L; // the devnet's KNRD pad: all of Q is income
-    await expect(harvests({ Q: 0n, L, pad: true, incomeTaken: 0n }, 0n, A(0x1))).resolves.toEqual([]); // nothing to empty
-    await expect(harvests({ Q, L, pad: false, incomeTaken: 0n }, f, A(0x1))).resolves.toEqual([Q]); // a collector: one harvest
+    await expect(harvests({ Q: 0n, L, kind: 2, incomeTaken: 0n }, 0n, A(0x1))).resolves.toEqual([]); // nothing to empty
+    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, f, A(0x1))).resolves.toEqual([Q]); // a collector: one harvest
     // no collector: the cut stays as LP quote and reads as taken income, so the second harvest is capital
-    await expect(harvests({ Q, L, pad: false, incomeTaken: 0n }, f, A(0))).resolves.toEqual([Q, Q / 2n]);
-    await expect(harvests({ Q, L, pad: false, incomeTaken: 0n }, 0n, A(0))).resolves.toEqual([Q]); // no income: no cut
-    await expect(harvests({ Q, L, pad: true, incomeTaken: 0n }, f, A(0x1))).rejects.toThrow(/a pad is retired/);
-    await expect(harvests({ Q, L, pad: false, incomeTaken: 0n }, 3n * f, A(0))).rejects.toThrow(/two harvests/); // income above Q, no collector
+    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, f, A(0))).resolves.toEqual([Q, Q / 2n]);
+    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, 0n, A(0))).resolves.toEqual([Q]); // no income: no cut
+    await expect(harvests({ Q, L, kind: 2, incomeTaken: 0n }, f, A(0x1))).rejects.toThrow(/a pad is retired/);
+    await expect(harvests({ Q, L, kind: 1, incomeTaken: 0n }, 3n * f, A(0))).rejects.toThrow(/two harvests/); // income above Q, no collector
     // the generation in the id (032): bit 255, the pool id's top 239 bits, gen in the low 16
     expect(fPoolShareId(POOL, 0) >> 255n).toBe(1n);
     expect(fPoolShareId(POOL, 3) & 0xffffn).toBe(3n);
@@ -312,7 +312,7 @@ describe("every F write helper encodes against the generated ABI", () => {
   });
   it("the launch: one multicall of initialize / seed / the seed lock / the opening buy / the name / the gates", async () => {
     const { c, encoded } = fakeClient();
-    const key = { quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], phi: 10n ** 16n, pad: true, authority: A(0xa) };
+    const key = { quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], phi: 10n ** 16n, kind: "pad", authority: A(0xa) };
     // viem's decoder checksums addresses; the assertions below compare lower-cased
     const lower = (v: unknown): unknown =>
       typeof v === "string" ? v.toLowerCase() : Array.isArray(v) ? v.map(lower) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, lower(x)])) : v;
@@ -334,7 +334,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(pad[2]!.args).toEqual([POOL, 1n, 7n, 0n, A(0xa)]);
     // a private pool: gate minting, list the creator, appoint them operator; an initialized pool
     // that a stranded launch left behind is not initialized again; `extra` rides last
-    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], privatePool: true, initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [POOL, true] })], account: A(0xa) }));
+    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], kind: "private", initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [POOL, true] })], account: A(0xa) }));
     expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "appointOperator", "setHarvestFeeExempt"]);
     expect(priv[1]!.args).toEqual([POOL, true, false]);
     expect(priv[2]!.args).toEqual([POOL, [A(0xa)], true]);
