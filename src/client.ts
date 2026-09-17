@@ -88,7 +88,10 @@ export const EXPECTED_VERSION = 3n;
 // `Pool.pendingOperator`); `setLegL`/`admitLeg` are gone, `setLegs` edits the next generation's
 // table while unseeded; `fPoolRelaunch` takes `legs`.
 // `getPool` decodes one field fewer, so a 9 deployment's struct no longer matches this SDK.
-export const EXPECTED_F_VERSION = 11n;
+// 12 (2026-09-17): one contract (decisions 039) — the sponsor facet is folded back into the
+// manager; `sponsor()` and the fallback are gone, every entry, error and event unchanged, so
+// `fPoolManagerAbi` is the manager's own ABI and no longer a union. Layout unchanged.
+export const EXPECTED_F_VERSION = 12n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
