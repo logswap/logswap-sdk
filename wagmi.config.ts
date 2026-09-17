@@ -21,7 +21,7 @@ export default defineConfig({
       forge: { build: false },
       // The singleton stack plus BasketPool — the homogeneous-claims sibling deployed beside it.
       // Its zaps live in LogswapRouter (one router, one Permit2 spender), so no fifth entry.
-      include: ["CPoolManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "FPoolManager.sol/**", "FPoolSponsor.sol/**"],
+      include: ["CPoolManager.sol/**", "LogswapRouter.sol/**", "LogswapLens.sol/**", "FPoolManager.sol/**"],
     }),
   ],
 });

@@ -24,16 +24,16 @@
  */
 
 import { encodeFunctionData, toFunctionSelector, type Address, type Hash, type Hex } from "viem";
-import { fPoolManagerAbi as fPoolPrimitiveAbi, fPoolSponsorAbi, logswapRouterAbi } from "./generated.js";
+import { fPoolManagerAbi, logswapRouterAbi } from "./generated.js";
 
 /**
- * The F manager's ABI is the UNION of its two compiled halves (decisions 031): `FPoolManager`
- * holds the primitive and forwards every other selector from its fallback to `FPoolSponsor` —
- * the lever, `claim`, `dissolve`, the handover, the gates, the desk, the names — by delegatecall.
- * One address from outside, so one ABI here; both halves carry the base's events and errors,
- * and viem tolerates the duplicates.
+ * One contract, one ABI (decisions 039, F version 12): the sponsor surface — `harvest`, `claim`,
+ * `dissolve`, the handover, the gates, the operator, `setLegs`, the names, the fee parameters —
+ * is `FPoolManager`'s own code again. From 031 to 038 it was a delegatecall facet
+ * (`FPoolSponsor`) and this ABI was the union of the two compiled halves; the union is gone with
+ * the facet, and the generated ABI is the whole surface.
  */
-export const fPoolManagerAbi = [...fPoolPrimitiveAbi, ...fPoolSponsorAbi] as const;
+export { fPoolManagerAbi };
 import type { LogswapClient } from "./client.js";
 
 const WAD = 10n ** 18n;
