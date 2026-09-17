@@ -80,7 +80,9 @@ export const EXPECTED_VERSION = 3n;
 // `successor`. A 7 deployment's share ids do not even resolve with this SDK.
 // 9 (2026-09-16): `deepen` is gone, `Pool.leverTheta` is `harvestedTheta` (decisions 034).
 // 10 (2026-09-17): no floor guard — `Pool.minBuffer`, `raiseMinBuffer`, `LEVER_FLOOR` gone;
-// `dissolve` needs an empty bid on every pool; `lockStrike` is `lockFloor` (decisions 035).
+// `dissolve` needs an empty bid on every pool (decisions 035); the key bit is the CLASS, `pad`
+// (036): `seed` mints a pad's shares to 0xdead, and the operator, the gates and the list are
+// refused on it — `fPoolLaunch` no longer transfers the seed itself.
 // `getPool` decodes one field fewer, so a 9 deployment's struct no longer matches this SDK.
 export const EXPECTED_F_VERSION = 10n;
 
