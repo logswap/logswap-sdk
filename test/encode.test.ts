@@ -49,7 +49,7 @@ import {
   fPoolSetGates,
   fPoolSetAllowed,
   fPoolAppointOperator,
-  fPoolRaiseMinBuffer,
+  fPoolEmptyingHarvests,
   fPoolSetLegL,
   fPoolAdmitLeg,
   fPoolTransferShares,
@@ -97,10 +97,10 @@ function fakeClient(): { c: LogswapClient; encoded: string[] } {
       if (q.functionName === "allowance" && (q.args?.length ?? 0) === 3) return [0n, 0, 0];
       if (q.functionName === "getPool") {
         return { quote: A(0xc), phi: 10n ** 16n, L: 10n ** 21n, Q: 0n, theta0: 0n, harvestedTheta: 0n,
-          bigSigma: 0n, authority: A(0xa), lockStrike: true, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
+          bigSigma: 0n, authority: A(0xa), lockFloor: true, seeded: true, gen: 1, n: 1, shares: 10n ** 21n,
           // the private-pool fields (contracts 25a7bcf): a decode that drops one is a runtime
           // TypeError in the browser, which is what this fake exists to catch first
-          pendingAuthority: A(0), operator: A(0), minBuffer: 0n, gateMint: false, gateSwap: false,
+          pendingAuthority: A(0), operator: A(0), gateMint: false, gateSwap: false,
           restructureBlock: 0, incomeTaken: 0n, name: `0x${"0".repeat(64)}` };
       }
       if (q.functionName === "legOf") return [A(0xb), 10n ** 18n, 0n, 10n ** 21n];
@@ -249,7 +249,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(
       fPoolInitialize(c, {
         quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n],
-        phi: 10n ** 16n, lockStrike: true, authority: A(0xa), account: A(0xa),
+        phi: 10n ** 16n, lockFloor: true, authority: A(0xa), account: A(0xa),
       }),
     ).resolves.toBe(HASH);
     // the seed names reserves (decisions 029): outright, or from marks against the key's weights
@@ -260,13 +260,35 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(fPoolReserveAt(10n ** 21n, 0n)).toBe(10n ** 21n);
     expect(Number(fPoolReserveAt(10n ** 21n, 693147180559945309n)) / 5e20).toBeCloseTo(1, 12); // e^{-ln 2}, to float precision
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
-    // the relaunch, in place: one multicall of dissolve / redeem / seed (decisions 025, 032)
+    // the relaunch, in place: one multicall of dissolve / redeem / seed (decisions 025, 032) — the
+    // fake's pool holds no quote, so no harvest rides in front (035)
     await expect(
       fPoolRelaunch(c, { poolId: POOL, shares: 10n ** 21n, L0: 10n ** 21n, Q0: 0n, r0: [10n ** 21n], account: A(0xa) }),
     ).resolves.toBe(HASH);
     await expect(
       fPoolRelaunch(c, { poolId: POOL, shares: 0n, L0: 10n ** 21n, Q0: 0n, x0: [0n], weights: [10n ** 18n], account: A(0xa) }),
     ).resolves.toBe(HASH);
+    // the harvests a relaunch sends first (035): the contract's arithmetic replayed. A stub
+    // answering the five reads, per shape.
+    const harvests = (pool: { Q: bigint; L: bigint; lockFloor: boolean; incomeTaken: bigint }, feePerL: bigint, collector: Address) =>
+      fPoolEmptyingHarvests(
+        {
+          addresses: { fPoolManager: A(0xf) },
+          public: {
+            readContract: async (p: { functionName: string }) =>
+              ({ getPool: pool, feePerL, HARVEST_FEE: 5n * 10n ** 17n, harvestFeeExempt: false, feeCollector: collector })[p.functionName],
+          },
+        } as unknown as LogswapClient,
+        POOL,
+      );
+    const Q = 115n * 10n ** 18n, L = 10n ** 21n, f = (Q * 10n ** 18n) / L; // the devnet's KNRD pad: all of Q is income
+    await expect(harvests({ Q: 0n, L, lockFloor: true, incomeTaken: 0n }, 0n, A(0x1))).resolves.toEqual([]); // nothing to empty
+    await expect(harvests({ Q, L, lockFloor: false, incomeTaken: 0n }, f, A(0x1))).resolves.toEqual([Q]); // a collector: one harvest
+    // no collector: the cut stays as LP quote and reads as taken income, so the second harvest is capital
+    await expect(harvests({ Q, L, lockFloor: false, incomeTaken: 0n }, f, A(0))).resolves.toEqual([Q, Q / 2n]);
+    await expect(harvests({ Q, L, lockFloor: false, incomeTaken: 0n }, 0n, A(0))).resolves.toEqual([Q]); // no income: no cut
+    await expect(harvests({ Q, L, lockFloor: true, incomeTaken: 0n }, f, A(0x1))).rejects.toThrow(/floor-locked/);
+    await expect(harvests({ Q, L, lockFloor: false, incomeTaken: 0n }, 3n * f, A(0))).rejects.toThrow(/two harvests/); // income above Q, no collector
     // the generation in the id (032): bit 255, the pool id's top 239 bits, gen in the low 16
     expect(fPoolShareId(POOL, 0) >> 255n).toBe(1n);
     expect(fPoolShareId(POOL, 3) & 0xffffn).toBe(3n);
@@ -289,7 +311,7 @@ describe("every F write helper encodes against the generated ABI", () => {
   it("the launch: one multicall of initialize / seed / the seed lock / the opening buy / the name / the gates", async () => {
     const { c, encoded } = fakeClient();
     const DEAD = "0x000000000000000000000000000000000000dEaD";
-    const key = { quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], phi: 10n ** 16n, lockStrike: true, authority: A(0xa) };
+    const key = { quote: A(0xc), bases: [A(0xb), A(0x9)], weights: [4n * 10n ** 17n, 6n * 10n ** 17n], phi: 10n ** 16n, lockFloor: true, authority: A(0xa) };
     // viem's decoder checksums addresses; the assertions below compare lower-cased
     const lower = (v: unknown): unknown =>
       typeof v === "string" ? v.toLowerCase() : Array.isArray(v) ? v.map(lower) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, lower(x)])) : v;
@@ -313,8 +335,8 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(pad[3]!.args).toEqual([POOL, 1n, 7n, 0n, A(0xa)]);
     // a private pool: gate minting, list the creator, appoint them operator; an initialized pool
     // that a stranded launch left behind is not initialized again; `extra` rides last
-    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], privatePool: true, initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "raiseMinBuffer", args: [POOL, 1n] })], account: A(0xa) }));
-    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "appointOperator", "raiseMinBuffer"]);
+    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], privatePool: true, initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [POOL, true] })], account: A(0xa) }));
+    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "appointOperator", "setHarvestFeeExempt"]);
     expect(priv[1]!.args).toEqual([POOL, true, false]);
     expect(priv[2]!.args).toEqual([POOL, [A(0xa)], true]);
     // and sent: ONE manager write, the multicall (the fake logs its simulate and its send)
@@ -329,7 +351,6 @@ describe("every F write helper encodes against the generated ABI", () => {
     await expect(fPoolSetGates(c, { poolId: POOL, gateMint: true, gateSwap: false, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSetAllowed(c, { poolId: POOL, who: [A(0xb), A(0xc)], allowed: true, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolAppointOperator(c, { poolId: POOL, operator: A(0xd), account: A(0xa) })).resolves.toBe(HASH);
-    await expect(fPoolRaiseMinBuffer(c, { poolId: POOL, minBuffer: 223143551314209755n, account: A(0xa) })).resolves.toBe(HASH);
     await expect(fPoolSetLegL(c, { poolId: POOL, j: 1, newLj: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
     await expect(fPoolSetLegL(c, { poolId: POOL, j: 2, newLj: 10n ** 21n, r: 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);
     await expect(fPoolAdmitLeg(c, { poolId: POOL, base: A(0xe), Lj: 10n ** 21n, R: 2n * 10n ** 21n, account: A(0xd) })).resolves.toBe(HASH);

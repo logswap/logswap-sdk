@@ -78,7 +78,11 @@ export const EXPECTED_VERSION = 3n;
 // generation (`fPoolShareId(poolId, gen)`), `dissolve(poolId)`, `redeem`, `claim` / `dividendOf`
 // / `rollIn` / `previewRollIn` take the generation, `Pool.gen` replaces `dissolved` and
 // `successor`. A 7 deployment's share ids do not even resolve with this SDK.
-export const EXPECTED_F_VERSION = 8n;
+// 9 (2026-09-16): `deepen` is gone, `Pool.leverTheta` is `harvestedTheta` (decisions 034).
+// 10 (2026-09-17): no floor guard — `Pool.minBuffer`, `raiseMinBuffer`, `LEVER_FLOOR` gone;
+// `dissolve` needs an empty bid on every pool; `lockStrike` is `lockFloor` (decisions 035).
+// `getPool` decodes one field fewer, so a 9 deployment's struct no longer matches this SDK.
+export const EXPECTED_F_VERSION = 10n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");
