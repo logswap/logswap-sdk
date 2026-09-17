@@ -50,6 +50,7 @@ import {
   fPoolSetAllowed,
   fPoolAppointOperator,
   fPoolEmptyingHarvests,
+  fPoolRetire,
   fPoolSetLegL,
   fPoolAdmitLeg,
   fPoolTransferShares,
@@ -260,6 +261,7 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(fPoolReserveAt(10n ** 21n, 0n)).toBe(10n ** 21n);
     expect(Number(fPoolReserveAt(10n ** 21n, 693147180559945309n)) / 5e20).toBeCloseTo(1, 12); // e^{-ln 2}, to float precision
     await expect(fPoolDissolve(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH);
+    await expect(fPoolRetire(c, { poolId: POOL, account: A(0xa) })).resolves.toBe(HASH); // the fake's Q = 0: a plain dissolve
     // the relaunch, in place: one multicall of dissolve / redeem / seed (decisions 025, 032) — the
     // fake's pool holds no quote, so no harvest rides in front (035)
     await expect(

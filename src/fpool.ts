@@ -867,14 +867,30 @@ export async function fPoolSeed(
 }
 
 /**
- * Retire the live generation (decisions 025, 032). Allowed at Q ≤ L/1e9 on every pool — the
- * market filled the ask — and on a pool that is not strike-locked at any Q. The live (S, Q, R_j)
- * become a frozen bundle every share of this generation redeems ({@link fPoolRedeem}) or rolls
- * ({@link fPoolRollIn}), forever; the pool is unseeded until the next {@link fPoolSeed}, which
- * opens generation `gen + 1` under the same id, gates, lists and promises.
+ * Retire the live generation (decisions 025, 032, 035) — the raw entry. Allowed only at an empty
+ * bid, Q ≤ L/1e9, on every pool: the market took it, or the authority harvested it out first
+ * ({@link fPoolRetire} does both in one transaction). The live (S, Q, R_j) become a frozen bundle
+ * every share of this generation redeems ({@link fPoolRedeem}) or rolls ({@link fPoolRollIn}),
+ * forever; the pool is unseeded until the next {@link fPoolSeed}, which opens generation
+ * `gen + 1` under the same id, gates and lists.
  */
 export async function fPoolDissolve(c: LogswapClient, a: { poolId: Hex; account: Address }) {
   return writeFPool(c, a.poolId, "dissolve", [], a.account);
+}
+
+/**
+ * Retire the live generation as ONE transaction: the harvests that empty the bid
+ * ({@link fPoolEmptyingHarvests} — a dividend to every share; none when it is already empty),
+ * then `dissolve` — the manager's `multicall`, the authority as sender. What a sponsor's
+ * "dissolve" button should call. Throws before sending on a floor-locked pool that still bids.
+ */
+export async function fPoolRetire(c: LogswapClient, a: { poolId: Hex; account: Address }) {
+  const harvests = await fPoolEmptyingHarvests(c, a.poolId);
+  if (harvests.length === 0) return fPoolDissolve(c, a);
+  const enc = (functionName: string, args: unknown[]) =>
+    encodeFunctionData({ abi: fPoolManagerAbi, functionName, args } as never) as Hex;
+  const calls: Hex[] = [...harvests.map((amount) => enc("harvest", [a.poolId, amount, a.account])), enc("dissolve", [a.poolId])];
+  return writeFPool0(c, "multicall", [calls], a.account);
 }
 
 /**
