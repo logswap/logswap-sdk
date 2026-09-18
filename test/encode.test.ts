@@ -75,7 +75,7 @@ const HASH = ("0x" + "11".repeat(32)) as Hex;
 const POOL = ("0x" + "22".repeat(32)) as Hex;
 const QUOTE_RESULT = (toFunctionSelector("QuoteResult(uint256)") + "1".padStart(64, "0")) as Hex;
 
-const KEY: PoolKey = { base: A(0xb), quote: A(0xc), tickSpacing: 10n ** 17n, phiMin: 0n, kappa: 0n, alpha: 0n };
+const KEY: PoolKey = { base: A(0xb), quote: A(0xc), tickSpacing: 10n ** 17n, phi: 0n };
 
 /** Every RPC-shaped entry point funnels into `encodeFunctionData`, which is the assertion. */
 function fakeClient(): { c: LogswapClient; encoded: string[] } {

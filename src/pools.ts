@@ -30,9 +30,8 @@ export interface PoolState {
   reserveQuote: bigint;
   /** Fee-per-unit-L accumulator: $\phi \cdot \mathrm{TV}(\log p)$. */
   F: bigint;
-  /** Quadratic variation of log-price, $\Sigma = \int (dx)^2$. */
+  /** Quadratic variation of log-price, $\Sigma = \sum_{\text{swaps}} (\Delta x_{\text{swap}})^2$ — one term per swap (decisions 042). */
   bigSigma: bigint;
-  sigma2Ema: bigint;
   currentK: bigint;
   protocolOwed: bigint;
   minBackstopL: bigint;
@@ -50,12 +49,16 @@ export async function getPool(c: LogswapClient, key: PoolKey): Promise<PoolState
   return v as unknown as PoolState;
 }
 
-/** The effective fee right now: $\max(\phi_{\min}, \kappa\sqrt{\sigma^2_{\text{ema}}})$, capped. */
-export async function phiEff(c: LogswapClient, key: PoolKey): Promise<bigint> {
+/**
+ * The market's fee: the key's `phi` with `0n` resolved to `DEFAULT_FEE`. Constant for the market's
+ * life (C version 4, decisions 042 — `phiEff` and the variance kernel before). Reverts for a key
+ * nobody initialized, which `discoverMarkets` relies on to drop a stale indexer's rows.
+ */
+export async function phiOf(c: LogswapClient, key: PoolKey): Promise<bigint> {
   return c.public.readContract({
     address: c.addresses.cPoolManager,
     abi: cPoolManagerAbi,
-    functionName: "phiEff",
+    functionName: "phiOf",
     args: [key],
   }) as Promise<bigint>;
 }
@@ -134,9 +137,7 @@ export async function discoverMarkets(
       base: a.base!,
       quote: a.quote!,
       tickSpacing: a.tickSpacing!,
-      phiMin: a.phiMin!,
-      kappa: a.kappa!,
-      alpha: a.alpha!,
+      phi: a.phi!,
     };
     return {
       key,

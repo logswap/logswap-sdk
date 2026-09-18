@@ -85,9 +85,9 @@ runs once and explicitly rather than being chained into both.
 - **The SDK hides the manager/router/lens split.** Which contract hosts which action is currently
   decided by EIP-170 headroom, not by design — so a future re-homing must be an SDK patch, not a
   breaking change for consumers.
-- **Zero is not the default.** `phiMin` and `alpha` of `0n` resolve to their defaults at *read* time,
-  so a key carrying `0n` and one carrying the resolved value are **different markets with different
-  ids**. Always address a market by the key it was initialized with.
+- **Zero is not the default.** A `phi` of `0n` resolves to `DEFAULT_FEE` at *read* time, so a key
+  carrying `0n` and one carrying the resolved value are **different markets with different ids**.
+  Always address a market by the key it was initialized with.
 - **Split every ERC-6909 `Transfer` on bit 255.** Clear means a token claim, not a position; an
   indexer that ignores this reports phantom LP positions for market makers parking inventory.
 

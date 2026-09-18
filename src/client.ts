@@ -58,8 +58,13 @@ export function createLogswapClient(args: {
  * **3** since 2026-09-03 (contracts `d8406fb`): `burnById` and `update` take an `owner`, `update`
  * mints to `to`, `positions()` returns `aps` as uint128 — and a returned quote flow now carries the
  * swept fees (decisions 018), which is why `exit`'s settle-to-one-asset math changed with it.
+ *
+ * **4** since 2026-09-18 (decisions 042 + 040): `PoolKey` is `(base, quote, tickSpacing, phi)` —
+ * the variance kernel and its two key fields are gone, so every pool id changed; `phiEff` is
+ * `phiOf`; `getPool` lost `sigma2Ema`; `Initialize` lost two fields; the cut is
+ * `MINT_FEE_PROTOCOL_CUT` / `setFeeParams`.
  */
-export const EXPECTED_VERSION = 3n;
+export const EXPECTED_VERSION = 4n;
 /**
  * The F manager's own tag (contracts 25a7bcf: 5 — the key's salt, pool names, the sponsor registry;
  * 4 was the income-only harvest cut).

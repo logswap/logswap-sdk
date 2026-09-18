@@ -22,12 +22,13 @@ export interface PoolKey {
   quote: Address;
   /** Log-tick spacing, WAD. The LP-boundary ladder — position floors and caps. */
   tickSpacing: bigint;
-  /** Fee floor, WAD. `0n` selects `DEFAULT_FEE_MIN` (2 bp) at read time. */
-  phiMin: bigint;
-  /** Variance-fee coefficient, WAD. `0n` disables the dynamic fee. */
-  kappa: bigint;
-  /** EMA decay, WAD. `0n` selects `DEFAULT_ALPHA` (1/2) at read time. */
-  alpha: bigint;
+  /**
+   * The swap fee, WAD, fixed for the life of the market: `FEE_MIN` (1 bp) ≤ φ ≤ `FEE_MAX` (25%),
+   * or `0n`, which selects `DEFAULT_FEE` (2 bp) at read time. Four fields since C version 4
+   * (decisions 042): `kappa` and `alpha` left with the variance kernel, and `phiMin` — a floor with
+   * nothing above it — became `phi`. Every pool id changed with the shape.
+   */
+  phi: bigint;
 }
 
 const POOL_KEY_ABI = [
@@ -37,9 +38,7 @@ const POOL_KEY_ABI = [
       { name: "base", type: "address" },
       { name: "quote", type: "address" },
       { name: "tickSpacing", type: "int256" },
-      { name: "phiMin", type: "uint256" },
-      { name: "kappa", type: "uint256" },
-      { name: "alpha", type: "uint256" },
+      { name: "phi", type: "uint256" },
     ],
   },
 ] as const;
@@ -47,8 +46,8 @@ const POOL_KEY_ABI = [
 /**
  * `poolId = keccak256(abi.encode(key))` — the primary key of the entire read model.
  *
- * Note the zero-vs-default caveat the Solidity type documents: `phiMin` and `alpha` of `0` resolve
- * to their defaults at READ time, so a key carrying `0n` and one carrying the resolved default are
+ * Note the zero-vs-default caveat the Solidity type documents: a `phi` of `0` resolves to
+ * `DEFAULT_FEE` at READ time, so a key carrying `0n` and one carrying the resolved default are
  * DIFFERENT markets with different ids, even though they behave identically. Always address a
  * market by the key it was initialized with.
  */
@@ -59,9 +58,7 @@ export function poolId(key: PoolKey): Hex {
         base: key.base,
         quote: key.quote,
         tickSpacing: key.tickSpacing,
-        phiMin: key.phiMin,
-        kappa: key.kappa,
-        alpha: key.alpha,
+        phi: key.phi,
       },
     ]),
   );

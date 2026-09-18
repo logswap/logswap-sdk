@@ -143,11 +143,11 @@ export async function indexerHealthy(url: string, signal?: AbortSignal): Promise
  */
 export async function discoverMarketsIndexed(url: string, signal?: AbortSignal): Promise<DiscoveredMarket[]> {
   const q = `{ allInitializes(first: 1000) { nodes {
-    poolId base quote tickSpacing phiMin kappa alpha x0 blockNumber txHash
+    poolId base quote tickSpacing phi x0 blockNumber txHash
   } } }`;
   type Row = {
-    poolId: Hex; base: Hex; quote: Hex; tickSpacing: string; phiMin: string;
-    kappa: string; alpha: string; x0: string; blockNumber: string; txHash: Hex;
+    poolId: Hex; base: Hex; quote: Hex; tickSpacing: string; phi: string;
+    x0: string; blockNumber: string; txHash: Hex;
   };
   const d = await gql<{ allInitializes: { nodes: Row[] } }>(url, q, undefined, signal);
   return d.allInitializes.nodes.map((n) => {
@@ -155,9 +155,7 @@ export async function discoverMarketsIndexed(url: string, signal?: AbortSignal):
       base: n.base as Address,
       quote: n.quote as Address,
       tickSpacing: BigInt(n.tickSpacing),
-      phiMin: BigInt(n.phiMin),
-      kappa: BigInt(n.kappa),
-      alpha: BigInt(n.alpha),
+      phi: BigInt(n.phi),
     };
     return {
       key,
@@ -196,7 +194,7 @@ export async function discoverMarketsBest(
                 await c.public.readContract({
                   address: c.addresses.cPoolManager,
                   abi: cPoolManagerAbi,
-                  functionName: "phiEff",
+                  functionName: "phiOf",
                   args: [m.key],
                 } as never);
                 return m;

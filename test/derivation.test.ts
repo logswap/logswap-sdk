@@ -22,9 +22,7 @@ interface Vector {
   base: string;
   quote: string;
   tickSpacing: string;
-  phiMin: string;
-  kappa: string;
-  alpha: string;
+  phi: string;
   poolId: string;
   floor: string;
   cap: string;
@@ -37,9 +35,7 @@ const keyOf = (v: Vector): PoolKey => ({
   base: v.base as Address,
   quote: v.quote as Address,
   tickSpacing: BigInt(v.tickSpacing),
-  phiMin: BigInt(v.phiMin),
-  kappa: BigInt(v.kappa),
-  alpha: BigInt(v.alpha),
+  phi: BigInt(v.phi),
 });
 
 describe("derivation vectors from the contract", () => {

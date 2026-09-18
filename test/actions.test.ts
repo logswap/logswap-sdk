@@ -30,17 +30,13 @@ const K: PoolKey = {
   base: "0x1111111111111111111111111111111111111111",
   quote: "0x2222222222222222222222222222222222222222",
   tickSpacing: 10n ** 17n,
-  phiMin: 3n * 10n ** 15n,
-  kappa: 6267n * 10n ** 14n,
-  alpha: 10n ** 16n,
+  phi: 3n * 10n ** 15n,
 };
 const K2: PoolKey = {
   base: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   quote: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   tickSpacing: 10n ** 16n,
-  phiMin: 0n,
-  kappa: 0n,
-  alpha: 0n,
+  phi: 0n,
 };
 const pid = poolId(K);
 const id0 = positionId(pid, K.tickSpacing, 0n);
