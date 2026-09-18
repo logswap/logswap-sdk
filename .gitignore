@@ -2,3 +2,6 @@ node_modules/
 dist/
 contracts/
 src/generated.ts
+
+# Claude Code worktrees / session files — never part of the package
+.claude/
