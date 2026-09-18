@@ -1,8 +1,9 @@
 /**
  * admin — the protocol's (feeCollector's) writes: the protocol's cuts, the harvest-cut exemption,
  * and the two-step collector handover, on both managers. Plain writes to the managers; no router.
- * One vocabulary (decisions 040): the C manager's `setProtocolFeeCut` / `PROTOCOL_FEE_CUT` are the
- * same words as F's `setFeeParams` / `MINT_FEE_PROTOCOL_CUT` until C version 4 renames them.
+ * One vocabulary (decisions 040): both managers call the protocol's cut of the mint fee
+ * `MINT_FEE_PROTOCOL_CUT` and set it through `setFeeParams` — one cut on C (since version 4,
+ * decisions 042; `setProtocolFeeCut` / `PROTOCOL_FEE_CUT` before), two on F.
  */
 
 import type { Address, Hash, Hex } from "viem";
@@ -14,9 +15,11 @@ function wallet(c: LogswapClient) {
   return c.wallet;
 }
 
-export async function setProtocolFeeCut(c: LogswapClient, cutWad: bigint): Promise<Hash> {
-  return wallet(c).writeContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "setProtocolFeeCut", args: [cutWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
+/** The C manager's `setFeeParams(mintFeeProtocolCut)` — one cut. */
+export async function setFeeParamsC(c: LogswapClient, mintFeeProtocolCutWad: bigint): Promise<Hash> {
+  return wallet(c).writeContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "setFeeParams", args: [mintFeeProtocolCutWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
 }
+/** The F manager's `setFeeParams(mintFeeProtocolCut, harvestProtocolCut)` — two cuts. */
 export async function setFeeParams(c: LogswapClient, mintFeeProtocolCutWad: bigint, harvestProtocolCutWad: bigint): Promise<Hash> {
   return wallet(c).writeContract({ address: c.addresses.fPoolManager as Address, abi: fPoolManagerAbi, functionName: "setFeeParams", args: [mintFeeProtocolCutWad, harvestProtocolCutWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
 }

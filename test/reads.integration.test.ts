@@ -14,7 +14,7 @@ import { createPublicClient, http, type Address } from "viem";
 import { foundry } from "viem/chains";
 import { readFileSync } from "node:fs";
 import { createLogswapClient, assertVersion, type LogswapClient } from "../src/client.js";
-import { discoverMarkets, getPool, isValidFloor, liveFloors, lpEdge, phiEff, priceOf, priceScale } from "../src/pools.js";
+import { discoverMarkets, getPool, isValidFloor, liveFloors, lpEdge, phiOf, priceOf, priceScale } from "../src/pools.js";
 import { balanceOf, describeId, getHolderPosition, partitionIds, positionsOf } from "../src/positions.js";
 import { claimId, isPosition, NO_CAP } from "../src/ids.js";
 import { poolId, type PoolKey } from "../src/keys.js";
@@ -53,9 +53,7 @@ try {
     base: deployment.weth as Address,
     quote: deployment.usdc as Address,
     tickSpacing: BigInt(deployment.tickSpacing as number),
-    phiMin: 0n,
-    kappa: 0n,
-    alpha: 0n,
+    phi: 0n,
   };
   live = true;
 } catch {
@@ -113,7 +111,7 @@ describe.skipIf(!live)("reads against the local deployment", () => {
 
     // F - Sigma/2 is signed and defined even on a barely-traded pool
     expect(typeof lpEdge(s)).toBe("bigint");
-    expect(await phiEff(c, m.key)).toBeGreaterThan(0n);
+    expect(await phiOf(c, m.key)).toBeGreaterThan(0n);
   });
 
   it("reads the ladder and validates floors against the grid", async () => {
