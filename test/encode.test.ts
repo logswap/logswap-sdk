@@ -283,7 +283,7 @@ describe("every F write helper encodes against the generated ABI", () => {
           addresses: { fPoolManager: A(0xf) },
           public: {
             readContract: async (p: { functionName: string }) =>
-              ({ getPool: pool, feePerL, HARVEST_FEE: 5n * 10n ** 17n, harvestFeeExempt: false, feeCollector: collector })[p.functionName],
+              ({ getPool: pool, feePerL, HARVEST_PROTOCOL_CUT: 5n * 10n ** 17n, harvestCutExempt: false, feeCollector: collector })[p.functionName],
           },
         } as unknown as LogswapClient,
         POOL,
@@ -339,8 +339,8 @@ describe("every F write helper encodes against the generated ABI", () => {
     expect(pad[2]!.args).toEqual([POOL, 1n, 7n, 0n, A(0xa)]);
     // a private pool: gate minting, list the creator, appoint them operator; an initialized pool
     // that a stranded launch left behind is not initialized again; `extra` rides last
-    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], kind: "private", initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [POOL, true] })], account: A(0xa) }));
-    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "setHarvestFeeExempt"]); // no self-appointment: the authority is the operator (037)
+    const priv = names(fPoolLaunchCalls(POOL, { ...key, L0: 10n ** 21n, Q0: 5n, x0: [0n, 0n], kind: "private", initialized: true, extra: [encodeFunctionData({ abi: fPoolManagerAbi, functionName: "setHarvestCutExempt", args: [POOL, true] })], account: A(0xa) }));
+    expect(priv.map((d) => d.functionName)).toEqual(["seed", "setGates", "setAllowed", "setHarvestCutExempt"]); // no self-appointment: the authority is the operator (037)
     expect(priv[1]!.args).toEqual([POOL, true, false]);
     expect(priv[2]!.args).toEqual([POOL, [A(0xa)], true]);
     // and sent: ONE manager write, the multicall (the fake logs its simulate and its send)

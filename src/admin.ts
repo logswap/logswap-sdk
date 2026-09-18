@@ -1,6 +1,8 @@
 /**
- * admin — the protocol's (feeCollector's) writes: the fee rates, the harvest-fee exemption, and
- * the two-step collector handover, on both managers. Plain writes to the managers; no router.
+ * admin — the protocol's (feeCollector's) writes: the protocol's cuts, the harvest-cut exemption,
+ * and the two-step collector handover, on both managers. Plain writes to the managers; no router.
+ * One vocabulary (decisions 040): the C manager's `setProtocolFeeCut` / `PROTOCOL_FEE_CUT` are the
+ * same words as F's `setFeeParams` / `MINT_FEE_PROTOCOL_CUT` until C version 4 renames them.
  */
 
 import type { Address, Hash, Hex } from "viem";
@@ -15,11 +17,12 @@ function wallet(c: LogswapClient) {
 export async function setProtocolFeeCut(c: LogswapClient, cutWad: bigint): Promise<Hash> {
   return wallet(c).writeContract({ address: c.addresses.cPoolManager, abi: cPoolManagerAbi, functionName: "setProtocolFeeCut", args: [cutWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
 }
-export async function setFeeParams(c: LogswapClient, mintFeeProtocolCutWad: bigint, harvestFeeWad: bigint): Promise<Hash> {
-  return wallet(c).writeContract({ address: c.addresses.fPoolManager as Address, abi: fPoolManagerAbi, functionName: "setFeeParams", args: [mintFeeProtocolCutWad, harvestFeeWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
+export async function setFeeParams(c: LogswapClient, mintFeeProtocolCutWad: bigint, harvestProtocolCutWad: bigint): Promise<Hash> {
+  return wallet(c).writeContract({ address: c.addresses.fPoolManager as Address, abi: fPoolManagerAbi, functionName: "setFeeParams", args: [mintFeeProtocolCutWad, harvestProtocolCutWad], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
 }
-export async function setHarvestFeeExempt(c: LogswapClient, poolId: Hex, exempt: boolean): Promise<Hash> {
-  return wallet(c).writeContract({ address: c.addresses.fPoolManager as Address, abi: fPoolManagerAbi, functionName: "setHarvestFeeExempt", args: [poolId, exempt], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
+/** Waive the protocol's cut of harvested income for one pool (`HARVEST_PROTOCOL_CUT`; F version 13 — `setHarvestFeeExempt` before). */
+export async function setHarvestCutExempt(c: LogswapClient, poolId: Hex, exempt: boolean): Promise<Hash> {
+  return wallet(c).writeContract({ address: c.addresses.fPoolManager as Address, abi: fPoolManagerAbi, functionName: "setHarvestCutExempt", args: [poolId, exempt], chain: c.wallet!.chain, account: c.wallet!.account! } as never);
 }
 export async function proposeCollector(c: LogswapClient, side: "C" | "F", next: Address): Promise<Hash> {
   const address = side === "C" ? c.addresses.cPoolManager : (c.addresses.fPoolManager as Address);
