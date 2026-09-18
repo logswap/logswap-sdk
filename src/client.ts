@@ -91,7 +91,13 @@ export const EXPECTED_VERSION = 3n;
 // 12 (2026-09-17): one contract (decisions 039) — the sponsor facet is folded back into the
 // manager; `sponsor()` and the fallback are gone, every entry, error and event unchanged, so
 // `fPoolManagerAbi` is the manager's own ABI and no longer a union. Layout unchanged.
-export const EXPECTED_F_VERSION = 12n;
+// 13 (2026-09-18): one vocabulary (decisions 040) — `HARVEST_FEE` is `HARVEST_PROTOCOL_CUT` (a
+// cut of harvested income, not a fee on the harvest) and the exemption is `harvestCutExempt` /
+// `setHarvestCutExempt`; `acceptAuthority` clears the operator, pending and accepted (a mandate
+// is voided by the handover of the role that granted it); `setLegs` needs a generation to have
+// lived (`gen > 0`); `initialize` refuses a codeless base and `mint` refuses `to = address(0)`
+// on both managers. Layout unchanged.
+export const EXPECTED_F_VERSION = 13n;
 
 export async function assertVersion(c: LogswapClient, expected = EXPECTED_VERSION): Promise<void> {
   const { cPoolManagerAbi } = await import("./generated.js");

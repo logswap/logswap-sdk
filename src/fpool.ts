@@ -930,8 +930,8 @@ export async function fPoolEmptyingHarvests(c: LogswapClient, poolId: Hex): Prom
   const [p, feePerL, fee, exempt, collector] = await Promise.all([
     rd<{ Q: bigint; L: bigint; kind: number; incomeTaken: bigint }>("getPool", [poolId]),
     rd<bigint>("feePerL", [poolId]),
-    rd<bigint>("HARVEST_FEE"),
-    rd<boolean>("harvestFeeExempt", [poolId]),
+    rd<bigint>("HARVEST_PROTOCOL_CUT"),
+    rd<boolean>("harvestCutExempt", [poolId]),
     rd<Address>("feeCollector"),
   ]);
   if (p.Q === 0n) return [];
