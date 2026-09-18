@@ -28,10 +28,15 @@ const DEPLOY = process.env.LOGSWAP_DEPLOYMENT ?? "../logswap-contract/deployment
 let c!: LogswapClient;
 let key!: PoolKey;
 let deployment!: Record<string, string | number>;
+// The fixture's liquidity provider. Since the deploy split the cast, `lp` (anvil #3) holds every
+// seeded position and the deployer is the protocol alone — `feeCollector` on both managers, no
+// positions. An artifact from before the split has only `deployer`, who then held them.
+let LP!: Address;
 let live = false;
 
 try {
   deployment = JSON.parse(readFileSync(DEPLOY, "utf8"));
+  LP = (deployment.lp ?? deployment.deployer) as Address;
   const pub = createPublicClient({ chain: foundry, transport: http(RPC) });
   await pub.getBlockNumber();
   c = createLogswapClient({
@@ -123,15 +128,15 @@ describe.skipIf(!live)("reads against the local deployment", () => {
   it("resolves a holder position with an id computed OFFLINE", async () => {
     const markets = await discoverMarkets(c);
     const m = markets.find((x) => x.poolId === deployment.poolId)!;
-    // an UNCAPPED class the deployer holds: the lowest live tick may belong to a capped class
+    // an UNCAPPED class the LP holds: the lowest live tick may belong to a capped class
     // alone (the fixture's capped-out class sits lowest), and an offline id is uncapped by shape
-    const held = await positionsOf(c, m.key, deployment.deployer as Address);
+    const held = await positionsOf(c, m.key, LP);
     expect(held.length).toBeGreaterThan(0);
     const floor = held[0]!.floor; // already log-price WAD; do NOT multiply by tickSpacing
     const floors = await liveFloors(c, m.key);
     expect(floors).toContain(floor);
 
-    const p = await getHolderPosition(c, m.key, deployment.deployer as Address, floor);
+    const p = await getHolderPosition(c, m.key, LP, floor);
     expect(p.floor).toBe(floor);
     expect(p.capped).toBe(false);
     expect(isPosition(p.id)).toBe(true);
@@ -154,7 +159,7 @@ describe.skipIf(!live)("reads against the local deployment", () => {
     const markets = await discoverMarkets(c);
     const m = markets.find((x) => x.poolId === deployment.poolId)!;
     const floors = await liveFloors(c, m.key);
-    const pid = (await getHolderPosition(c, m.key, deployment.deployer as Address, floors[0]!)).id;
+    const pid = (await getHolderPosition(c, m.key, LP, floors[0]!)).id;
 
     const split = partitionIds([cid, pid]);
     expect(split.claims).toEqual([cid]);
@@ -165,7 +170,7 @@ describe.skipIf(!live)("reads against the local deployment", () => {
     const markets = await discoverMarkets(c);
     const m = markets.find((x) => x.poolId === deployment.poolId)!;
     const floors = await liveFloors(c, m.key);
-    const p = await getHolderPosition(c, m.key, deployment.deployer as Address, floors[0]!, NO_CAP);
+    const p = await getHolderPosition(c, m.key, LP, floors[0]!, NO_CAP);
     expect(p.cap).toBe(NO_CAP);
   });
 });
